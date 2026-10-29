@@ -2,8 +2,7 @@ name: ICPH HCS - Test and Deploy
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -12,7 +11,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: github-pages
+  group: icph-hcs-github-pages
   cancel-in-progress: true
 
 jobs:
@@ -31,16 +30,32 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Check JavaScript syntax and run HCS flow tests
+      - name: Normalize files and test HCS
+        shell: bash
         run: |
-          npm run check
-          npm test
-
-      - name: Assemble static website
-        run: |
-          mkdir -p _site
+          set -euo pipefail
+          mkdir -p _site/src _check/src _check/tests
           cp index.html config.js _site/
-          cp -R src _site/src
+
+          if [[ -f src/main.mjs && -f src/domain.mjs && -f src/repository.mjs && -f src/styles.css ]]; then
+            echo 'Found structured source files under src/'
+            cp src/main.mjs src/domain.mjs src/repository.mjs src/styles.css _site/src/
+          else
+            echo 'Found flattened files in repository root; reorganizing for deployment.'
+            cp main.mjs domain.mjs repository.mjs styles.css _site/src/
+          fi
+
+          if [[ -f tests/domain.test.mjs ]]; then
+            cp tests/domain.test.mjs _check/tests/
+          else
+            cp domain.test.mjs _check/tests/
+          fi
+          cp _site/src/domain.mjs _check/src/
+
+          node --check _site/src/main.mjs
+          node --check _site/src/domain.mjs
+          node --check _site/src/repository.mjs
+          node --test _check/tests/domain.test.mjs
           touch _site/.nojekyll
 
       - name: Configure GitHub Pages
@@ -54,4 +69,3 @@ jobs:
       - name: Deploy GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
