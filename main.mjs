@@ -97,13 +97,26 @@ function bedCard(b) {
   const c = cycleForBed(b);
   const status = STATUSES[b.status] || STATUSES.available;
   const selected = b.bed_no === state.selectedBed;
-  return `<article class="bed-card ${status.color} ${selected ? 'selected' : ''}" data-action="select-bed" data-bed="${b.bed_no}" tabindex="0" role="button" aria-label="Select Bed ${b.bed_no}">
-    <div class="bed-card-main"><div class="bed-id"><div class="bed-number">${String(b.bed_no).padStart(2, '0')}</div><div><h3>BED ${b.bed_no}</h3><p>HCS Production Line</p></div></div>
-    <div class="bed-title"><div class="bed-project">${c ? esc(c.project_name) : 'Bed Available'}</div><div class="bed-subproject">${c ? `Project ${esc(c.project_code)} <span>·</span> ${esc(c.height_mm)}mm <span>·</span> ${esc(c.strand_pattern)}` : 'Ready for the next production cycle'}</div></div>
-    <div class="bed-status"><span class="status-badge ${status.color}"><span class="status-circle"></span>${status.label}</span><span class="edit-caption">Manage ${ico('chevron', 14)}</span></div></div>
-    <div class="bed-body"><div class="slab-visual ${b.status !== 'available' ? 'engaged' : ''}"><div class="slab-top"><span class="slab-number">HCS-${String(b.bed_no).padStart(2, '0')}</span><span class="slab-ruler">${c ? esc(c.height_mm) + ' mm' : 'IDLE'}</span></div><div class="slab-cores">${Array(10).fill('<i></i>').join('')}</div><div class="slab-bottom"></div></div>
-    <div class="bed-steps">${timeline(b, c)}</div>
-    <div class="bed-metrics"><div><span>Preparation</span><strong>${displayDuration(c, 'preparation', b.status)}</strong></div><div><span>Casting</span><strong>${displayDuration(c, 'casting', b.status)}</strong></div><div><span>Curing</span><strong>${displayDuration(c, 'curing', b.status)}</strong></div><div><span>Cube Strength</span><strong>${c?.cube_strength_mpa != null ? esc(c.cube_strength_mpa) + ' MPa' : '—'}</strong></div></div></div>
+  return `<article class="bed-card bed-card-horizontal ${status.color} ${selected ? 'selected' : ''}" data-action="select-bed" data-bed="${b.bed_no}" tabindex="0" role="button" aria-label="Select Bed ${b.bed_no}">
+    <div class="status-banner ${status.color}">${esc(status.short)}</div>
+    <div class="bed-horizontal-head">
+      <div class="bed-number-pill">BED ${b.bed_no}</div>
+      <div class="bed-project-block">
+        <div class="bed-project">${c ? esc(c.project_name) : 'Available for next casting'}</div>
+        <div class="bed-subproject">${c ? `${esc(c.project_code)} · ${esc(c.height_mm)} mm · ${esc(c.strand_pattern)}` : 'No active production cycle'}</div>
+      </div>
+    </div>
+    <div class="bed-status-row">
+      <strong class="big-status ${status.color}">${esc(status.label)}</strong>
+      <span class="edit-caption">Manage ${ico('chevron', 14)}</span>
+    </div>
+    <div class="bed-horizontal-steps">${timeline(b, c)}</div>
+    <div class="bed-horizontal-metrics">
+      <div><span>Preparation</span><strong>${displayDuration(c, 'preparation', b.status)}</strong></div>
+      <div><span>Casting</span><strong>${displayDuration(c, 'casting', b.status)}</strong></div>
+      <div><span>Curing</span><strong>${displayDuration(c, 'curing', b.status)}</strong></div>
+      <div><span>Strength</span><strong>${c?.cube_strength_mpa != null ? esc(c.cube_strength_mpa) + ' MPa' : '—'}</strong></div>
+    </div>
   </article>`;
 }
 function operatorPanel() {
@@ -165,8 +178,11 @@ function overview() {
       ${statValue(beds.filter(b => b.status === 'curing').length, 'Under Curing', 'beds', 'clock', 'purple-stat')}
       ${statValue(castToday().length, 'Casting Today', 'batches', 'box', 'green-stat')}
    </div>
-   <div class="workspace-grid"><div class="production-column"><div class="section-title-row"><div><div class="mini-eyebrow">PRODUCTION FLOOR / HCS</div><h2>Bed Status Monitor <span class="muted-count">05 Lines</span></h2></div><div class="section-legend"><span><i class="key-dot free"></i> Available</span><span><i class="key-dot working"></i> In Process</span></div></div>
-      <div class="bed-list">${beds.map(bedCard).join('')}</div>${todayTable()}</div>${operatorPanel()}</div>`;
+   <section class="horizontal-bed-section">
+      <div class="section-title-row horizontal-title-row"><div><div class="mini-eyebrow">PRODUCTION FLOOR / HCS</div><h2>Bed Status Monitor <span class="muted-count">05 Lines</span></h2><p class="horizontal-section-note">Left to right overview for all beds. Click any bed to manage details.</p></div><div class="section-legend"><span><i class="key-dot free"></i> Available</span><span><i class="key-dot working"></i> In Process</span></div></div>
+      <div class="bed-list bed-list-horizontal">${beds.map(bedCard).join('')}</div>
+   </section>
+   <div class="overview-detail-grid"><div class="summary-column">${todayTable()}</div>${operatorPanel()}</div>`;
 }
 function archiveRows() {
   const search = state.archiveSearch.trim().toLowerCase();
