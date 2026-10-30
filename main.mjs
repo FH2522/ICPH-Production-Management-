@@ -1,7 +1,7 @@
 import {
   STATUSES, STEPS, TIMEZONE, HISTORY_DAYS, singaporeDate, singaporeTime,
   singaporeDateTimeInput, fromSingaporeInput, elapsed, duration, stageDuration,
-  parseProjectText, escapeHtml as esc
+  parseProjectText, validateArchivedEdit, PHOTO_STAGES, PREVIOUS_STEPS, escapeHtml as esc
 } from './domain.mjs';
 import { demoRepository, supabaseRepository } from './repository.mjs';
 
@@ -10,12 +10,12 @@ const conf = window.ICPH_CONFIG || {};
 const configured = Boolean(conf.supabaseUrl?.trim() && conf.supabaseAnonKey?.trim());
 const state = {
   repo: null, mode: configured ? 'live' : 'demo', session: null,
-  beds: [], projects: [], cycles: [], selectedBed: 1, tab: 'overview',
+  beds: [], projects: [], cycles: [], photos: [], admin: false, selectedBed: 1, tab: 'overview',
   busy: false, online: configured ? 'CONNECTING' : 'DEMO',
   modal: null, toast: null, projectText: '', height: '', strandPattern: '', strength: '',
   eventTime: singaporeDateTimeInput(), manualTime: false,
   archiveDate: '', archiveSort: 'desc', archiveSearch: '', loadError: null,
-  loadVersion: 0
+  loadVersion: 0, modalCycle: null, lightbox: null
 };
 let unsubscribe = null;
 let unsubscribeAuth = null;
@@ -41,6 +41,7 @@ const icons = {
   download: '<path d="M12 3v12m-4-4 4 4 4-4M4 17v4h16v-4"/>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/>',
   alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/>',
+  camera: '<path d="M14 4h-4l-2 3H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-4l-2-3Z"/><circle cx="12" cy="13" r="4"/>',
   sparkle: '<path d="m12 3 1.9 6.1L20 11l-6.1 1.9L12 19l-1.9-6.1L4 11l6.1-1.9L12 3Z"/>',
   wrench: '<path d="M14.7 6.3a5 5 0 0 0-6.4 6.4L3 18a2 2 0 0 0 3 3l5.3-5.3a5 5 0 0 0 6.4-6.4l-3.2 3.2-3.4-.7-.7-3.4 3.3-3.1Z"/>',
   bolt: '<path d="m13 2-9 12h7l-1 8 10-12h-7V2Z"/>'
@@ -49,6 +50,7 @@ const ico = (name, size = 18) => `<svg class="icon" width="${size}" height="${si
 const bedByNumber = n => state.beds.find(b => b.bed_no === Number(n));
 const cycleForBed = b => state.cycles.find(c => c.id === b?.active_cycle_id);
 const signedIn = () => state.mode === 'demo' || Boolean(state.session?.user);
+const cyclePhotos = (id, stage) => state.photos.filter(p => p.cycle_id === id && (!stage || p.stage === stage));
 const today = () => singaporeDate();
 const allArchived = () => state.cycles.filter(c => c.cut_end).filter(c => +new Date(c.cut_end) > Date.now() - HISTORY_DAYS * 86400000);
 const castToday = () => state.cycles.filter(c => c.casting_start && singaporeDate(c.casting_start) === today());
@@ -93,6 +95,31 @@ function displayDuration(c, stage, status) {
   if (!start) return '—';
   return `<span ${isActive ? `data-stage-start="${esc(start)}"` : ''}>${duration(stageDuration(c, stage))}${isActive ? ' · live' : ''}</span>`;
 }
+function photoThumb(photo) {
+  if (!photo.url) return '';
+  return `<button type="button" class="photo-thumb" data-action="open-photo" data-photo-id="${esc(photo.id)}" aria-label="View ${esc(photo.stage)} photo full screen"><img src="${esc(photo.url)}" loading="lazy" alt="${esc(photo.stage)} production evidence" /></button>`;
+}
+function photoEvidence(c, includeUpload = true) {
+  if (!c) return '';
+  if (!signedIn()) return '<p class="photo-locked">Production photos require staff login.</p>';
+  return `<section class="photo-evidence"><div class="photo-evidence-heading"><h3>Production Photos</h3><span>Tap a thumbnail to enlarge</span></div>
+    ${PHOTO_STAGES.map(([stage, label]) => {
+      const list = cyclePhotos(c.id, stage);
+      const inputId = `photo-${stage}-${c.id}`;
+      const cameraId = `camera-${stage}-${c.id}`;
+      return `<div class="photo-stage"><div class="photo-stage-head"><strong>${esc(label)}</strong><span>${list.length} photo${list.length === 1 ? '' : 's'}</span></div>
+        <div class="photo-stage-content">
+          ${list.map(photoThumb).join('')}
+          ${includeUpload ? `<button type="button" class="photo-action" data-action="choose-photo" data-input="${esc(inputId)}">${ico('plus', 16)} Add Photo</button>
+            <button type="button" class="photo-action camera-action" data-action="choose-photo" data-input="${esc(cameraId)}">${ico('camera', 16)} Camera</button>
+            <input id="${esc(inputId)}" class="photo-file-input" type="file" accept="image/*" data-photo-cycle="${esc(c.id)}" data-photo-stage="${stage}" />
+            <input id="${esc(cameraId)}" class="photo-file-input" type="file" accept="image/*" capture="environment" data-photo-cycle="${esc(c.id)}" data-photo-stage="${stage}" />` : ''}
+        </div>
+      </div>`;
+    }).join('')}
+    ${includeUpload ? '<p class="photo-footnote">JPEG photos are compressed for mobile upload. Cloud photos are accessible only to signed-in staff.</p>' : ''}
+  </section>`;
+}
 function bedCard(b) {
   const c = cycleForBed(b);
   const status = STATUSES[b.status] || STATUSES.available;
@@ -117,6 +144,7 @@ function bedCard(b) {
       <div><span>Curing</span><strong>${displayDuration(c, 'curing', b.status)}</strong></div>
       <div><span>Strength</span><strong>${c?.cube_strength_mpa != null ? esc(c.cube_strength_mpa) + ' MPa' : '—'}</strong></div>
     </div>
+    ${c && signedIn() && cyclePhotos(c.id).length ? `<div class="bed-photo-strip">${cyclePhotos(c.id).slice(0, 3).map(photoThumb).join('')}<small>${cyclePhotos(c.id).length} photo(s)</small></div>` : ""}
   </article>`;
 }
 function operatorPanel() {
@@ -149,9 +177,14 @@ function operatorPanel() {
       ${b.status === 'preparation' ? `${button('finish_preparation', 'Finish Preparation')}<p class="action-note">Preparation duration will be recorded.</p>` : ''}
       ${b.status === 'ready_casting' ? button('start_casting', 'Start Casting') : ''}
       ${b.status === 'casting' ? `${button('finish_casting', 'Finish Casting & Start Curing')}<p class="action-note">Curing will start automatically at casting completion time.</p>` : ''}
-      ${b.status === 'curing' ? `<div class="strength-entry"><label class="field-label" for="strength-field">Cube Strength (MPa) <span class="required">*</span></label><div class="strength-group"><input id="strength-field" type="number" min="0.01" max="250" step="0.01" placeholder="e.g. 38.5" data-field="strength" value="${esc(state.strength)}" />${button('set_cube_strength', 'Save Strength', 'secondary')}</div><div class="field-note">Last recorded: ${c?.cube_strength_mpa == null ? 'Not recorded' : esc(c.cube_strength_mpa) + ' MPa · ' + esc(singaporeTime(c.cube_strength_updated_at)) + ' SGT'}</div></div>${button('start_cut', 'Start Cut & Demoulding', 'primary', c?.cube_strength_mpa == null)}<p class="action-note">Cube strength must be recorded first. No automatic strength approval threshold is imposed.</p>` : ''}
+      ${b.status === 'curing' ? `<div class="strength-entry"><label class="field-label" for="strength-field">Cube Strength (MPa) <span class="required">*</span></label><div class="strength-group"><input id="strength-field" type="number" min="0.01" max="250" step="0.01" placeholder="e.g. 38.5" data-field="strength" value="${esc(state.strength)}" />${button('set_cube_strength', 'Save Strength', 'secondary')}</div><div class="field-note">Last recorded: ${c?.cube_strength_mpa == null ? 'Not recorded' : esc(c.cube_strength_mpa) + ' MPa · ' + esc(singaporeTime(c.cube_strength_updated_at)) + ' SGT'}</div>
+        <div class="cube-photo-inline"><span>Cube Strength Photo</span><div class="cube-photo-items">${cyclePhotos(c.id,'cube_strength').map(photoThumb).join('')}
+        <button type="button" class="photo-action" data-action="choose-photo" data-input="cube-inline-photo-${esc(c.id)}">${ico('camera', 16)} Insert Photo</button>
+        <input id="cube-inline-photo-${esc(c.id)}" class="photo-file-input" type="file" accept="image/*" data-photo-cycle="${esc(c.id)}" data-photo-stage="cube_strength" /></div></div></div>${button('start_cut', 'Start Cut & Demoulding', 'primary', c?.cube_strength_mpa == null)}<p class="action-note">Cube strength must be recorded first. No automatic strength approval threshold is imposed.</p>` : ''}
       ${b.status === 'cutting' ? `${button('finish_cut', 'Finish & Archive Production')}<p class="action-note">This will release Bed ${b.bed_no} and move the batch into the 30-day archive.</p>` : ''}
+      ${b.status !== 'available' ? `<button class="btn back-step" type="button" data-action="back-step" ${state.busy ? 'disabled' : ''}>${ico('history', 16)} Back to Last Step · ${esc(PREVIOUS_STEPS[b.status])}</button>` : ''}
       </div>`}
+  ${c ? photoEvidence(c, b.status !== 'available' && signedIn()) : ''}
   <div class="panel-footer">${ico('shield', 16)} ${state.mode === 'demo' ? 'Demo changes stay on this browser only' : 'Changes are stored securely and synced to all viewers'}</div>
   </div></aside>`;
 }
@@ -200,13 +233,44 @@ function archive() {
         <div class="filter-group"><label for="archive-sort">Sort by date</label><select id="archive-sort" data-field="archiveSort"><option value="desc" ${state.archiveSort === 'desc' ? 'selected' : ''}>Newest first</option><option value="asc" ${state.archiveSort === 'asc' ? 'selected' : ''}>Oldest first</option></select></div>
         <div class="filter-group search-filter"><label for="archive-search">Search project / bed / strand</label><input id="archive-search" type="search" data-field="archiveSearch" placeholder="Search production records..." value="${esc(state.archiveSearch)}" /></div>
         <button class="reset-filter" data-action="clear-filters">Clear filters</button></div>
-      <div class="table-scroll"><table class="archive-table"><thead><tr><th>CAST DATE</th><th>BED</th><th>PROJECT</th><th>HEIGHT</th><th>STRAND</th><th>PREPARATION</th><th>CASTING</th><th>CURING</th><th>CUBE (MPa)</th><th>CUT & DEMOULD</th><th>COMPLETED (SGT)</th></tr></thead><tbody>
-      ${rows.length ? rows.map(c => `<tr><td><strong>${esc(singaporeDate(c.casting_start || c.prep_start))}</strong></td><td>Bed ${c.bed_no}</td><td><strong>${esc(c.project_code)}</strong><span class="muted-line">${esc(c.project_name)}</span></td><td>${esc(c.height_mm)} mm</td><td>${esc(c.strand_pattern)}</td><td>${duration(stageDuration(c, 'preparation'))}</td><td>${duration(stageDuration(c, 'casting'))}</td><td>${duration(stageDuration(c, 'curing'), 'hours')}</td><td>${esc(c.cube_strength_mpa ?? '—')}</td><td>${duration(stageDuration(c, 'cutting'))}</td><td>${esc(singaporeTime(c.cut_end))}</td></tr>`).join('') : `<tr><td colspan="11" class="empty-row">${ico('history', 21)} No completed records match the selected filters.</td></tr>`}</tbody></table></div>
+      <div class="table-scroll"><table class="archive-table"><thead><tr><th>CAST DATE</th><th>BED</th><th>PROJECT</th><th>HEIGHT</th><th>STRAND</th><th>PREPARATION</th><th>CASTING</th><th>CURING</th><th>CUBE (MPa)</th><th>CUT & DEMOULD</th><th>COMPLETED (SGT)</th><th>PHOTOS / ADMIN</th></tr></thead><tbody>
+      ${rows.length ? rows.map(c => `<tr><td><strong>${esc(singaporeDate(c.casting_start || c.prep_start))}</strong></td><td>Bed ${c.bed_no}</td><td><strong>${esc(c.project_code)}</strong><span class="muted-line">${esc(c.project_name)}</span></td><td>${esc(c.height_mm)} mm</td><td>${esc(c.strand_pattern)}</td><td>${duration(stageDuration(c, 'preparation'))}</td><td>${duration(stageDuration(c, 'casting'))}</td><td>${duration(stageDuration(c, 'curing'), 'hours')}</td><td>${esc(c.cube_strength_mpa ?? '—')}</td><td>${duration(stageDuration(c, 'cutting'))}</td><td>${esc(singaporeTime(c.cut_end))}</td><td><div class="archive-actions"><button type="button" class="small-action" data-action="view-album" data-cycle-id="${esc(c.id)}">${signedIn() ? `Photos (${cyclePhotos(c.id).length})` : 'Photos (login)'}</button>${state.admin ? `<button type="button" class="small-action edit-action" data-action="edit-history" data-cycle-id="${esc(c.id)}">Edit</button>` : ''}</div></td></tr>`).join('') : `<tr><td colspan="12" class="empty-row">${ico('history', 21)} No completed records match the selected filters.</td></tr>`}</tbody></table></div>
       <div class="archive-footnote">${ico('shield', 15)} Displayed archive: last 30 days by completion time · All times use Singapore Time (UTC+8) · Source: ${state.mode === 'live' ? 'Supabase production database' : 'local demo storage'}</div>
    </section>`;
 }
+function editHistoryModal() {
+  const c = state.cycles.find(x => x.id === state.modalCycle);
+  if (!c || !c.cut_end || !state.admin) return '';
+  const dateInput = (name, label, value) => `<div><label class="field-label" for="h-${name}">${label}</label><input id="h-${name}" type="datetime-local" name="${name}" value="${esc(singaporeDateTimeInput(value))}" required /></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal-bg"><div class="modal-card history-editor" role="dialog" aria-modal="true" aria-label="Edit completed production history">
+    <div class="modal-head"><div><div class="mini-eyebrow">ADMINISTRATOR ONLY</div><h2>Edit Production History</h2><p>Bed ${c.bed_no} · ${esc(c.project_code)} · Changes are audited.</p></div><button class="icon-button" data-action="close-modal" aria-label="Close">${ico('x', 21)}</button></div>
+    <form id="history-form" data-cycle-id="${esc(c.id)}">
+      <label class="field-label" for="h-project">Project</label>
+      <select id="h-project" name="project_id" required>${state.projects.map(p => `<option value="${p.id}" ${Number(p.id) === Number(c.project_id) ? 'selected' : ''}>${esc(p.code)} - ${esc(p.name)}</option>`).join('')}</select>
+      <div class="two-fields"><div><label class="field-label" for="h-height">Height (mm)</label><input id="h-height" name="height_mm" type="number" min="1" max="1000" step="0.1" value="${esc(c.height_mm)}" required /></div>
+      <div><label class="field-label" for="h-strand">Strand Pattern</label><input id="h-strand" name="strand_pattern" value="${esc(c.strand_pattern)}" maxlength="150" required /></div></div>
+      <div class="edit-time-grid">${dateInput('prep_start','Preparation Start',c.prep_start)}${dateInput('prep_end','Preparation End',c.prep_end)}${dateInput('casting_start','Casting Start',c.casting_start)}${dateInput('casting_end','Casting End / Curing Start',c.casting_end)}${dateInput('cube_strength_updated_at','Cube Test Time',c.cube_strength_updated_at)}${dateInput('cut_start','Cut Start',c.cut_start)}${dateInput('cut_end','Cut & Demould Finish',c.cut_end)}</div>
+      <label class="field-label" for="h-strength">Cube Strength (MPa)</label><input id="h-strength" type="number" min="0.01" max="250" step="0.01" name="cube_strength_mpa" value="${esc(c.cube_strength_mpa)}" required />
+      <p class="field-note">All times use Singapore time. The casting completion timestamp also determines curing start. Previous data will remain in the audit log.</p>
+      <button class="btn primary" type="submit" ${state.busy ? 'disabled' : ''}>Save Historical Correction</button>
+    </form>
+    ${photoEvidence(c, true)}
+  </div></div>`;
+}
+function albumModal() {
+  const c = state.cycles.find(x => x.id === state.modalCycle);
+  if (!c) return '';
+  return `<div class="modal-backdrop" data-action="close-modal-bg"><div class="modal-card album-modal" role="dialog" aria-modal="true" aria-label="Production photo gallery"><div class="modal-head"><div><div class="mini-eyebrow">PRODUCTION EVIDENCE</div><h2>Bed ${c.bed_no} · ${esc(c.project_code)}</h2></div><button class="icon-button" data-action="close-modal" aria-label="Close">${ico('x',21)}</button></div>${photoEvidence(c, state.admin)}</div></div>`;
+}
+function lightbox() {
+  const p = state.photos.find(photo => photo.id === state.lightbox);
+  if (!p?.url) return '';
+  return `<div class="lightbox" role="dialog" aria-modal="true" aria-label="Full size production photo" data-action="close-photo-bg"><button type="button" class="lightbox-close" data-action="close-photo" aria-label="Close photo">${ico('x', 27)}</button><img src="${esc(p.url)}" alt="Enlarged ${esc(p.stage)} production photo"/><div class="lightbox-caption">${esc(PHOTO_STAGES.find(([s]) => s === p.stage)?.[1] || p.stage)} · ${esc(singaporeTime(p.created_at))}</div></div>`;
+}
 function modal() {
   if (!state.modal) return '';
+  if (state.modal === 'edit') return editHistoryModal();
+  if (state.modal === 'album') return albumModal();
   const project = state.modal === 'project';
   return `<div class="modal-backdrop" data-action="close-modal-bg"><div class="modal-card" role="dialog" aria-modal="true" aria-label="${project ? 'Add project' : 'Supervisor login'}">
     <div class="modal-head"><div><div class="mini-eyebrow">${project ? 'PROJECT MANAGEMENT' : 'SECURE ACCESS'}</div><h2>${project ? 'Add New Project' : 'Supervisor Login'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="Close">${ico('x', 21)}</button></div>
@@ -223,8 +287,8 @@ function render() {
     return;
   }
   app.innerHTML = `<div class="app-shell">${header()}<main class="site-main">${nav()}${state.tab === 'overview' ? overview() : archive()}
-    <footer class="app-footer"><div><b>ICPH</b> / Production Control Center <span class="footer-divider">·</span> HCS Module v1.0</div><span>Timezone: ${TIMEZONE} · ${state.mode === 'demo' ? 'Local demonstration' : 'Cloud-connected'}</span></footer>
-    ${signedIn() ? `<button class="floating-add" data-action="show-project" title="Add Project">${ico('plus', 19)}<span>Add Project</span></button>` : ''}</main>${modal()}${state.toast ? `<div class="toast ${state.toast.type}">${ico(state.toast.type === 'error' ? 'alert' : 'check', 18)}<span>${esc(state.toast.text)}</span><button data-action="dismiss-toast">${ico('x', 16)}</button></div>` : ''}</div>`;
+    <footer class="app-footer"><div><b>ICPH</b> / Production Control Center <span class="footer-divider">·</span> HCS Module v1.4</div><span>Timezone: ${TIMEZONE} · ${state.mode === 'demo' ? 'Local demonstration' : 'Cloud-connected'}</span></footer>
+    ${signedIn() ? `<button class="floating-add" data-action="show-project" title="Add Project">${ico('plus', 19)}<span>Add Project</span></button>` : ''}</main>${modal()}${lightbox()}${state.toast ? `<div class="toast ${state.toast.type}">${ico(state.toast.type === 'error' ? 'alert' : 'check', 18)}<span>${esc(state.toast.text)}</span><button data-action="dismiss-toast">${ico('x', 16)}</button></div>` : ''}</div>`;
 }
 function showToast(text, type = 'success') {
   clearTimeout(toastTimeout);
@@ -238,6 +302,7 @@ async function refresh() {
   state.beds = data.beds;
   state.projects = data.projects;
   state.cycles = data.cycles;
+  state.photos = data.photos || [];
   state.loadError = null;
   render();
 }
@@ -309,12 +374,76 @@ function exportCSV() {
   setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 
+async function compressPhoto(file) {
+  if (!file.type.startsWith('image/')) throw new Error('Please choose a photo.');
+  if (file.size > 20 * 1024 * 1024) throw new Error('Choose an image smaller than 20 MB.');
+  let bitmap, image, tempUrl;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    // Some iPhones decode camera photos in <img> but not via createImageBitmap.
+    tempUrl = URL.createObjectURL(file);
+    try {
+      image = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Unsupported image format. Try a JPEG or take a fresh photo.'));
+        img.src = tempUrl;
+      });
+    } finally { URL.revokeObjectURL(tempUrl); }
+  }
+  const source = bitmap || image;
+  const factor = Math.min(1, 1600 / Math.max(source.width, source.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(source.width * factor));
+  canvas.height = Math.max(1, Math.round(source.height * factor));
+  const context = canvas.getContext('2d');
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  bitmap?.close?.();
+  const jpeg = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+  if (!jpeg || jpeg.size > 5 * 1024 * 1024) throw new Error('Unable to compress photo under 5 MB.');
+  return new File([jpeg], `icph-${Date.now()}.jpg`, { type: 'image/jpeg' });
+}
+async function uploadPhotoInput(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  try {
+    if (!signedIn()) throw new Error('Supervisor login required.');
+    state.busy = true;
+    // Preserve the file before rendering a loading state (input is destroyed).
+    const cycleId = input.dataset.photoCycle;
+    const stage = input.dataset.photoStage;
+    render();
+    const compressed = await compressPhoto(file);
+    await state.repo.uploadPhoto(cycleId, stage, compressed);
+    await refresh();
+    showToast('Production photo uploaded successfully');
+  } catch (error) { showToast(error.message || 'Photo upload failed', 'error'); }
+  finally { state.busy = false; render(); }
+}
+async function backStep() {
+  const b = bedByNumber(state.selectedBed);
+  if (!b || !PREVIOUS_STEPS[b.status]) return;
+  const extra = b.status === 'preparation' ? '\nThis will cancel the current production cycle (audit retained).' :
+    b.status === 'curing' ? '\nCube strength will be cleared. Existing photos will remain as evidence.' : '';
+  if (!confirm(`Move Bed ${b.bed_no} back from ${STATUSES[b.status].short} to ${PREVIOUS_STEPS[b.status]}?${extra}`)) return;
+  try { state.busy = true; render(); await state.repo.backStep(b.bed_no); await refresh(); showToast(`Bed ${b.bed_no} moved to ${PREVIOUS_STEPS[b.status] || 'previous step'}`); }
+  catch (error) { showToast(error.message || 'Unable to return to previous step', 'error'); }
+  finally { state.busy = false; render(); }
+}
 app.addEventListener('click', async event => {
   const target = event.target.closest('[data-action], [data-process]');
   if (!target || target.disabled) return;
   const action = target.dataset.action;
   if (target.dataset.process) return runAction(target.dataset.process);
   switch (action) {
+    case 'choose-photo': document.getElementById(target.dataset.input)?.click(); break;
+    case 'open-photo': state.lightbox = target.dataset.photoId; render(); break;
+    case 'close-photo': state.lightbox = null; render(); break;
+    case 'close-photo-bg': if (event.target === target) { state.lightbox = null; render(); } break;
+    case 'back-step': await backStep(); break;
+    case 'view-album': state.modalCycle = target.dataset.cycleId; state.modal = 'album'; render(); break;
+    case 'edit-history': if (state.admin) { state.modalCycle = target.dataset.cycleId; state.modal = 'edit'; render(); } break;
     case 'select-bed': {
       state.selectedBed = Number(target.dataset.bed);
       state.manualTime = false; state.strength = cycleForBed(bedByNumber(state.selectedBed))?.cube_strength_mpa ?? '';
@@ -332,7 +461,7 @@ app.addEventListener('click', async event => {
     case 'export-csv': exportCSV(); break;
     case 'refresh': try { await refresh(); showToast('Production data refreshed'); } catch (error) { showToast(error.message, 'error'); } break;
     case 'retry': state.loadError = null; render(); await bootstrap(); break;
-    case 'sign-out': try { await state.repo.signOut(); state.session = null; render(); showToast('Signed out'); } catch (error) { showToast(error.message, 'error'); } break;
+    case 'sign-out': try { await state.repo.signOut(); state.session = null; state.admin = false; state.photos = []; render(); showToast('Signed out'); } catch (error) { showToast(error.message, 'error'); } break;
     default: break;
   }
 });
@@ -340,7 +469,8 @@ app.addEventListener('keydown', event => {
   if (event.key === 'Enter' && event.target.matches('.bed-card[data-action="select-bed"]')) {
     event.preventDefault(); event.target.click();
   }
-  if (event.key === 'Escape' && state.modal) { state.modal = null; render(); }
+  if (event.key === 'Escape' && state.lightbox) { state.lightbox = null; render(); }
+  else if (event.key === 'Escape' && state.modal) { state.modal = null; render(); }
 });
 app.addEventListener('input', event => {
   const el = event.target;
@@ -350,6 +480,7 @@ app.addEventListener('input', event => {
 });
 app.addEventListener('change', event => {
   const el = event.target;
+  if (el.matches('input[data-photo-stage]')) { void uploadPhotoInput(el); return; }
   if (!el.dataset.field) return;
   if (el.dataset.field === 'selectedBed') {
     state.selectedBed = Number(el.value);
@@ -365,12 +496,35 @@ app.addEventListener('submit', async event => {
   const form = event.target;
   const values = new FormData(form);
   if (form.id === 'project-form') return addProject(values.get('code'), values.get('name'));
+  if (form.id === 'history-form') {
+    if (!state.admin) return showToast('Administrator login required', 'error');
+    const c = state.cycles.find(row => row.id === form.dataset.cycleId);
+    if (!c) return showToast('Archived production record not found', 'error');
+    try {
+      const data = {};
+      for (const key of ['prep_start','prep_end','casting_start','casting_end','cube_strength_updated_at','cut_start','cut_end']) {
+        const selected = String(values.get(key));
+        data[key] = selected === singaporeDateTimeInput(c[key]) ? c[key] : fromSingaporeInput(selected);
+      }
+      for (const key of ['project_id','height_mm','strand_pattern','cube_strength_mpa']) data[key] = values.get(key);
+      validateArchivedEdit(c, data);
+      if (!confirm('Save changes to archived production history? An audit entry will be created.')) return;
+      state.busy = true; render();
+      await state.repo.editHistory(c.id, data);
+      state.modal = null; state.modalCycle = null;
+      await refresh(); showToast('Archived production record corrected; audit saved');
+    } catch (error) { showToast(error.message || 'Could not edit history', 'error'); }
+    finally { state.busy = false; render(); }
+    return;
+  }
   if (form.id === 'login-form') {
     try {
       state.busy = true;
       const result = await state.repo.signIn(String(values.get('email')), String(values.get('password')));
       state.session = result.session || result;
+      state.admin = await state.repo.isAdmin();
       state.modal = null;
+      await refresh();
       showToast('Supervisor login successful');
     } catch (error) { showToast(error.message || 'Login failed', 'error'); }
     finally { state.busy = false; render(); }
@@ -385,7 +539,12 @@ async function bootstrap() {
     state.mode = state.repo.mode;
     const authState = await state.repo.getSession();
     state.session = state.mode === 'live' ? authState.session : authState;
-    unsubscribeAuth = state.repo.onAuthChange(session => { state.session = session; render(); });
+    state.admin = signedIn() ? await state.repo.isAdmin() : false;
+    unsubscribeAuth = state.repo.onAuthChange(session => {
+      state.session = session;
+      state.admin = false; render();
+      Promise.resolve().then(async () => { state.admin = signedIn() ? await state.repo.isAdmin() : false; await refresh(); }).catch(() => {});
+    });
     await refresh();
     unsubscribe = state.repo.subscribe(() => refresh().catch(error => showToast(error.message, 'error')),
       status => { state.online = status; const badge = document.querySelector('.live-indicator');
@@ -406,5 +565,5 @@ setInterval(() => {
     if (input && document.activeElement !== input) input.value = singaporeDateTimeInput();
   }
 }, 15000);
-setInterval(() => { if (state.repo) refresh().catch(() => {}); }, 30000);
+setInterval(() => { if (state.repo && !document.querySelector('input:focus, select:focus, textarea:focus')) refresh().catch(() => {}); }, 30000);
 bootstrap();
