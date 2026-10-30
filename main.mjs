@@ -1,7 +1,7 @@
 import {
   STATUSES, STEPS, TIMEZONE, HISTORY_DAYS, singaporeDate, singaporeTime,
   singaporeDateTimeInput, fromSingaporeInput, elapsed, duration, stageDuration,
-  parseProjectText, validateArchivedEdit, PHOTO_STAGES, PREVIOUS_STEPS, escapeHtml as esc
+  parseProjectText, validateArchivedEdit, PHOTO_STAGES, PREVIOUS_STEPS, formulaRate, computeMaterials, cycleMaterials, escapeHtml as esc
 } from './domain.mjs';
 import { demoRepository, supabaseRepository } from './repository.mjs';
 
@@ -10,9 +10,9 @@ const conf = window.ICPH_CONFIG || {};
 const configured = Boolean(conf.supabaseUrl?.trim() && conf.supabaseAnonKey?.trim());
 const state = {
   repo: null, mode: configured ? 'live' : 'demo', session: null,
-  beds: [], projects: [], cycles: [], photos: [], admin: false, selectedBed: 1, tab: 'overview',
+  beds: [], projects: [], cycles: [], photos: [], formulas: [], admin: false, selectedBed: 1, tab: 'overview',
   busy: false, online: configured ? 'CONNECTING' : 'DEMO',
-  modal: null, toast: null, projectText: '', height: '', strandPattern: '', strength: '',
+  modal: null, toast: null, projectText: '', height: '', strandPattern: '', castingLength: '', strength: '',
   eventTime: singaporeDateTimeInput(), manualTime: false,
   archiveDate: '', archiveSort: 'desc', archiveSearch: '', loadError: null,
   loadVersion: 0, modalCycle: null, lightbox: null
@@ -56,6 +56,38 @@ const allArchived = () => state.cycles.filter(c => c.cut_end).filter(c => +new D
 const castToday = () => state.cycles.filter(c => c.casting_start && singaporeDate(c.casting_start) === today());
 const statValue = (count, title, detail, icon, style) => `<article class="kpi-card ${style}"><div class="kpi-top"><span>${esc(title)}</span><span class="kpi-icon">${ico(icon, 19)}</span></div><div class="kpi-number">${count}<small> ${detail}</small></div></article>`;
 
+function num(value, decimals=2) { return value == null || !Number.isFinite(Number(value)) ? '—' : Number(value).toLocaleString('en-SG',{minimumFractionDigits:decimals,maximumFractionDigits:decimals}); }
+function materialForInput() {
+  const bedLen = formulaRate(state.formulas,'bed_length',state.selectedBed);
+  const vol = formulaRate(state.formulas,'volume',state.height);
+  const steel = formulaRate(state.formulas,'steel',state.strandPattern);
+  const len = Number(state.castingLength);
+  try {
+    const numbers = state.castingLength && len > 0 ? computeMaterials({castingLengthM:len,bedLengthM:bedLen,volumePerM:vol,steelPerM:steel}) : null;
+    return { numbers, bedLen, vol, steel, error:null };
+  } catch(e) { return { numbers:null,bedLen,vol,steel,error:e.message }; }
+}
+function materialsMini(c) {
+  const m = cycleMaterials(c);
+  return m ? `<div class="material-mini"><span>Cast ${num(m.casting_length_m,2)} m</span><span>Waste ${num(m.wastage_m,2)} m / ${m.wastage_ratio == null ? '—' : num(m.wastage_ratio*100,1)+'%'}</span><span>Concrete ${num(m.concrete_volume_m3,3)} m³</span><span>Steel ${num(m.steel_weight_kg,2)} kg</span></div>` : '';
+}
+function materialsPreview() {
+  const { numbers:m, bedLen, vol, steel, error } = materialForInput();
+  return `<div class="material-preview-head"><strong>Automatic Material Calculation</strong><button type="button" data-action="tab-formula" class="text-button">Formula Settings</button></div>
+    <div class="material-preview-grid">
+      <div><span>Default Bed Length</span><strong>${num(bedLen,2)} m</strong></div>
+      <div><span>Wastage</span><strong>${num(m?.wastage_m,2)} m</strong></div>
+      <div><span>Wastage Ratio</span><strong>${m?.wastage_ratio == null ? '—' : num(m.wastage_ratio*100,2)+'%'}</strong></div>
+      <div><span>Concrete Volume</span><strong>${num(m?.concrete_volume_m3,3)} m³</strong></div>
+      <div><span>Steel Weight</span><strong>${num(m?.steel_weight_kg,2)} kg</strong></div>
+    </div>
+    ${error ? `<p class="formula-warning">${esc(error)}</p>` : ''}
+    ${!bedLen || !vol || !steel ? `<p class="formula-warning">Missing formula: ${[!bedLen?'Bed length':null,!vol?'Height volume factor':null,!steel?'Strand steel factor':null].filter(Boolean).join(', ')}. Missing results appear as —, not estimated.</p>` : ''}`;
+}
+function materialCells(c) {
+  const m=cycleMaterials(c);
+  return `<td>${num(m?.casting_length_m,2)}</td><td>${num(m?.wastage_m,2)} m <span class="muted-line">${m?.wastage_ratio == null ? '—' : num(m.wastage_ratio*100,2)+'%'}</span></td><td>${num(m?.concrete_volume_m3,3)}</td><td>${num(m?.steel_weight_kg,2)}</td>`;
+}
 function header() {
   return `<header class="topbar"><div class="topbar-content">
     <div class="brand"><div class="brand-mark">${ico('layers', 25)}</div><div><div class="brand-name">ICPH<span class="brand-pipe"> / </span><span class="brand-app">PRODUCTION</span></div><div class="brand-subtitle">Production Management System</div></div></div>
@@ -73,6 +105,7 @@ function nav() {
   </div><div class="view-nav">
     <button class="view-tab ${state.tab === 'overview' ? 'active' : ''}" data-action="tab-overview">${ico('grid', 17)} Live Production</button>
     <button class="view-tab ${state.tab === 'archive' ? 'active' : ''}" data-action="tab-archive">${ico('history', 17)} Daily Production Summary <span class="tab-count">${allArchived().length}</span></button>
+    <button class="view-tab ${state.tab === 'formula' ? 'active' : ''}" data-action="tab-formula">${ico('wrench', 17)} Formula Settings</button>
   </div></nav>`;
 }
 function timeline(b, c) {
@@ -144,6 +177,7 @@ function bedCard(b) {
       <div><span>Curing</span><strong>${displayDuration(c, 'curing', b.status)}</strong></div>
       <div><span>Strength</span><strong>${c?.cube_strength_mpa != null ? esc(c.cube_strength_mpa) + ' MPa' : '—'}</strong></div>
     </div>
+    ${c ? materialsMini(c) : ""}
     ${c && signedIn() && cyclePhotos(c.id).length ? `<div class="bed-photo-strip">${cyclePhotos(c.id).slice(0, 3).map(photoThumb).join('')}<small>${cyclePhotos(c.id).length} photo(s)</small></div>` : ""}
   </article>`;
 }
@@ -159,7 +193,7 @@ function operatorPanel() {
     <label class="field-label" for="bed-select">Production Bed <span class="required">*</span></label>
     <div class="select-wrap"><select id="bed-select" data-field="selectedBed">${state.beds.map(row => `<option value="${row.bed_no}" ${b.bed_no === row.bed_no ? 'selected' : ''}>Bed ${row.bed_no} — ${STATUSES[row.status]?.short || row.status}</option>`).join('')}</select></div>
     <div class="current-status"><span>Current bed status</span><strong class="status-badge ${status.color}"><span class="status-circle"></span>${status.label}</strong></div>
-    ${c ? `<div class="active-context"><div class="active-context-head">${ico('box', 16)} CURRENT PRODUCTION</div><strong>${esc(c.project_code)} — ${esc(c.project_name)}</strong><div>${esc(c.height_mm)} mm height · ${esc(c.strand_pattern)}</div><div class="context-start">Started ${esc(singaporeTime(c.prep_start))} SGT</div></div>` : ''}
+    ${c ? `<div class="active-context"><div class="active-context-head">${ico('box', 16)} CURRENT PRODUCTION</div><strong>${esc(c.project_code)} — ${esc(c.project_name)}</strong><div>${esc(c.height_mm)} mm height · ${esc(c.strand_pattern)} · ${num(c.casting_length_m,2)} m casting length</div><div class="context-start">Started ${esc(singaporeTime(c.prep_start))} SGT</div>${materialsMini(c)}</div>` : ''}
     ${locked ? `<div class="login-gate">${ico('shield', 22)}<h3>View-only access</h3><p>All staff can view live bed statuses. A supervisor account is required to update production.</p><button class="btn primary" data-action="show-login">${ico('log', 16)} Supervisor login</button></div>` : `
       ${b.status === 'available' ? `<div class="editor-fields">
         <label class="field-label" for="project-field">Project <span class="required">*</span></label>
@@ -168,6 +202,9 @@ function operatorPanel() {
         <div class="field-note">Choose an existing project or enter <b>10200 - New Project</b> to add it automatically.</div>
         <div class="two-fields"><div><label class="field-label" for="height-field">Height (mm) <span class="required">*</span></label><input id="height-field" data-field="height" type="number" min="1" max="1000" step="0.1" placeholder="e.g. 200" value="${esc(state.height)}" /></div>
         <div><label class="field-label" for="strand-field">Strand Pattern <span class="required">*</span></label><input id="strand-field" data-field="strandPattern" type="text" maxlength="150" placeholder="e.g. 6T-9.53" value="${esc(state.strandPattern)}" /></div></div>
+        <label class="field-label" for="casting-length-field" style="margin-top:15px">Casting Length (m) <span class="required">*</span></label>
+        <input id="casting-length-field" data-field="castingLength" type="number" min="0.001" max="500" step="0.001" inputmode="decimal" placeholder="e.g. 115.50" value="${esc(state.castingLength)}" />
+        <div class="material-preview" id="material-preview">${materialsPreview()}</div>
       </div>` : ''}
       <div class="editor-fields time-fields"><div class="timestamp-head"><label class="field-label" for="event-time">${ico('clock', 15)} Event Date & Time (SGT)</label><button class="text-button" data-action="reset-time">Use current time</button></div>
       <input id="event-time" type="datetime-local" data-field="eventTime" value="${esc(current)}" />
@@ -191,14 +228,14 @@ function operatorPanel() {
 function todayTable() {
   const rows = castToday().sort((a, b) => +new Date(b.casting_start) - +new Date(a.casting_start));
   return `<section class="section-card today-summary"><div class="section-card-head"><div><div class="mini-eyebrow">LIVE DAILY TRACKING</div><h2>Today's Casting Summary</h2><p>Every HCS batch with a Casting start time on ${esc(today())} (Singapore).</p></div><span class="count-chip">${rows.length} batches</span></div>
-    <div class="table-scroll"><table><thead><tr><th>BED</th><th>PROJECT</th><th>HEIGHT</th><th>STRAND PATTERN</th><th>CAST START (SGT)</th><th>CAST DURATION</th><th>STATUS</th></tr></thead><tbody>
+    <div class="table-scroll"><table><thead><tr><th>BED</th><th>PROJECT</th><th>HEIGHT</th><th>STRAND PATTERN</th><th>CAST START (SGT)</th><th>CAST DURATION</th><th>LENGTH (m)</th><th>WASTAGE (m / %)</th><th>VOLUME (m³)</th><th>STEEL (kg)</th><th>STATUS</th></tr></thead><tbody>
     ${rows.length ? rows.map(c => {
       const b = bedByNumber(c.bed_no);
       const curStatus = b?.active_cycle_id === c.id ? b.status : 'available';
       const label = c.cut_end ? 'Completed' : STATUSES[curStatus]?.short || 'In production';
       const dur = c.casting_end ? duration(elapsed(c.casting_start, c.casting_end)) : duration(elapsed(c.casting_start));
-      return `<tr><td><strong>Bed ${c.bed_no}</strong></td><td><strong>${esc(c.project_code)}</strong><span class="muted-line">${esc(c.project_name)}</span></td><td>${esc(c.height_mm)} mm</td><td>${esc(c.strand_pattern)}</td><td>${esc(singaporeTime(c.casting_start))}</td><td>${dur}${c.casting_end ? '' : ' · live'}</td><td><span class="table-status ${c.cut_end ? 'complete' : STATUSES[curStatus]?.color || 'blue'}">${esc(label)}</span></td></tr>`;
-    }).join('') : `<tr><td colspan="7" class="empty-row">${ico('box', 21)} No batches have started casting today.</td></tr>`}</tbody></table></div></section>`;
+      return `<tr><td><strong>Bed ${c.bed_no}</strong></td><td><strong>${esc(c.project_code)}</strong><span class="muted-line">${esc(c.project_name)}</span></td><td>${esc(c.height_mm)} mm</td><td>${esc(c.strand_pattern)}</td><td>${esc(singaporeTime(c.casting_start))}</td><td>${dur}${c.casting_end ? '' : ' · live'}</td>${materialCells(c)}<td><span class="table-status ${c.cut_end ? 'complete' : STATUSES[curStatus]?.color || 'blue'}">${esc(label)}</span></td></tr>`;
+    }).join('') : `<tr><td colspan="11" class="empty-row">${ico('box', 21)} No batches have started casting today.</td></tr>`}</tbody></table></div></section>`;
 }
 function overview() {
   const beds = state.beds;
@@ -233,10 +270,33 @@ function archive() {
         <div class="filter-group"><label for="archive-sort">Sort by date</label><select id="archive-sort" data-field="archiveSort"><option value="desc" ${state.archiveSort === 'desc' ? 'selected' : ''}>Newest first</option><option value="asc" ${state.archiveSort === 'asc' ? 'selected' : ''}>Oldest first</option></select></div>
         <div class="filter-group search-filter"><label for="archive-search">Search project / bed / strand</label><input id="archive-search" type="search" data-field="archiveSearch" placeholder="Search production records..." value="${esc(state.archiveSearch)}" /></div>
         <button class="reset-filter" data-action="clear-filters">Clear filters</button></div>
-      <div class="table-scroll"><table class="archive-table"><thead><tr><th>CAST DATE</th><th>BED</th><th>PROJECT</th><th>HEIGHT</th><th>STRAND</th><th>PREPARATION</th><th>CASTING</th><th>CURING</th><th>CUBE (MPa)</th><th>CUT & DEMOULD</th><th>COMPLETED (SGT)</th><th>PHOTOS / ADMIN</th></tr></thead><tbody>
-      ${rows.length ? rows.map(c => `<tr><td><strong>${esc(singaporeDate(c.casting_start || c.prep_start))}</strong></td><td>Bed ${c.bed_no}</td><td><strong>${esc(c.project_code)}</strong><span class="muted-line">${esc(c.project_name)}</span></td><td>${esc(c.height_mm)} mm</td><td>${esc(c.strand_pattern)}</td><td>${duration(stageDuration(c, 'preparation'))}</td><td>${duration(stageDuration(c, 'casting'))}</td><td>${duration(stageDuration(c, 'curing'), 'hours')}</td><td>${esc(c.cube_strength_mpa ?? '—')}</td><td>${duration(stageDuration(c, 'cutting'))}</td><td>${esc(singaporeTime(c.cut_end))}</td><td><div class="archive-actions"><button type="button" class="small-action" data-action="view-album" data-cycle-id="${esc(c.id)}">${signedIn() ? `Photos (${cyclePhotos(c.id).length})` : 'Photos (login)'}</button>${state.admin ? `<button type="button" class="small-action edit-action" data-action="edit-history" data-cycle-id="${esc(c.id)}">Edit</button>` : ''}</div></td></tr>`).join('') : `<tr><td colspan="12" class="empty-row">${ico('history', 21)} No completed records match the selected filters.</td></tr>`}</tbody></table></div>
+      <div class="table-scroll"><table class="archive-table"><thead><tr><th>CAST DATE</th><th>BED</th><th>PROJECT</th><th>HEIGHT</th><th>STRAND</th><th>PREPARATION</th><th>CASTING</th><th>CURING</th><th>CUBE (MPa)</th><th>CUT & DEMOULD</th><th>COMPLETED (SGT)</th><th>LENGTH (m)</th><th>WASTAGE (m / %)</th><th>VOLUME (m³)</th><th>STEEL (kg)</th><th>PHOTOS / ADMIN</th></tr></thead><tbody>
+      ${rows.length ? rows.map(c => `<tr><td><strong>${esc(singaporeDate(c.casting_start || c.prep_start))}</strong></td><td>Bed ${c.bed_no}</td><td><strong>${esc(c.project_code)}</strong><span class="muted-line">${esc(c.project_name)}</span></td><td>${esc(c.height_mm)} mm</td><td>${esc(c.strand_pattern)}</td><td>${duration(stageDuration(c, 'preparation'))}</td><td>${duration(stageDuration(c, 'casting'))}</td><td>${duration(stageDuration(c, 'curing'), 'hours')}</td><td>${esc(c.cube_strength_mpa ?? '—')}</td><td>${duration(stageDuration(c, 'cutting'))}</td><td>${esc(singaporeTime(c.cut_end))}</td>${materialCells(c)}<td><div class="archive-actions"><button type="button" class="small-action" data-action="view-album" data-cycle-id="${esc(c.id)}">${signedIn() ? `Photos (${cyclePhotos(c.id).length})` : 'Photos (login)'}</button>${state.admin ? `<button type="button" class="small-action edit-action" data-action="edit-history" data-cycle-id="${esc(c.id)}">Edit</button>` : ''}</div></td></tr>`).join('') : `<tr><td colspan="16" class="empty-row">${ico('history', 21)} No completed records match the selected filters.</td></tr>`}</tbody></table></div>
       <div class="archive-footnote">${ico('shield', 15)} Displayed archive: last 30 days by completion time · All times use Singapore Time (UTC+8) · Source: ${state.mode === 'live' ? 'Supabase production database' : 'local demo storage'}</div>
    </section>`;
+}
+function formulaPage() {
+  const rates=state.formulas;
+  const list=(kind)=>rates.filter(r=>r.kind===kind).sort((a,b)=>kind==='volume' ? Number(a.key)-Number(b.key) : a.key.localeCompare(b.key));
+  const canEdit=state.admin;
+  const rateInput=(kind,key,placeholder)=>`<form class="formula-inline" data-formula-kind="${kind}"><input type="hidden" name="key" value="${esc(key)}"/><input class="formula-number" type="number" name="rate" step="0.000001" min="0.000001" max="500" inputmode="decimal" placeholder="${placeholder}" value="${esc(formulaRate(rates,kind,key) ?? '')}" ${canEdit?'':'disabled'} required /><button class="btn primary formula-save" ${canEdit?'':'disabled'} type="submit">Save</button></form>`;
+  const formatList=(kind,unit)=> list(kind).length ? `<div class="formula-rate-list">${list(kind).map(r=>`<div class="rate-row"><strong>${esc(r.key)}</strong><span>${num(r.rate,kind==='volume'?4:3)} ${unit}</span>${canEdit?`<button type="button" class="small-action" data-action="delete-formula" data-formula-kind="${kind}" data-formula-key="${esc(r.key)}">Remove</button>`:''}</div>`).join('')}</div>` : '<div class="formula-empty">No rates configured yet.</div>';
+  return `<div class="hero formula-hero"><div><div class="eyebrow"><span class="eyebrow-line"></span> PRODUCTION CONFIGURATION</div><h1>HCS <span>Formula Settings</span></h1><p>Preset bed lengths, concrete volume per metre by HCS height, and steel weight per metre by strand pattern.</p></div></div>
+    <div class="formula-help">${ico('shield',17)} ${canEdit ? 'Administrator mode: you may update these coefficients.' : 'View-only: an administrator must log in to edit coefficients.'} <b>Changes only apply to new production cycles.</b> Existing cycles retain their saved values.</div>
+    <div class="formula-layout">
+      <section class="formula-card"><div class="formula-card-top"><span>01 / BEDS</span><h2>Default Bed Length</h2><p>Set the maximum casting length separately for each HCS bed.</p></div>
+        <div class="bed-formula-list">${[1,2,3,4,5].map(n=>`<div class="bed-formula-row"><strong>Bed ${n}</strong>${rateInput('bed_length',n,'Length (m)')}</div>`).join('')}</div>
+      </section>
+      <section class="formula-card"><div class="formula-card-top"><span>02 / CONCRETE</span><h2>Volume by Height</h2><p>Height (mm) → Concrete Volume (m³ per casting metre)</p></div>
+        ${canEdit ? `<form class="formula-new" data-formula-kind="volume"><label>Height (mm)<input name="key" type="number" min="1" max="1000" step="0.1" placeholder="e.g. 200" required /></label><label>Volume (m³/m)<input name="rate" type="number" min="0.000001" max="500" step="0.000001" inputmode="decimal" placeholder="From approved section data" required /></label><button class="btn primary" type="submit">Save Height Formula</button></form>` : ''}
+        ${formatList('volume','m³/m')}
+      </section>
+      <section class="formula-card"><div class="formula-card-top"><span>03 / STRANDS</span><h2>Steel by Strand Pattern</h2><p>Strand Pattern → Steel Weight (kg per casting metre)</p></div>
+        ${canEdit ? `<form class="formula-new" data-formula-kind="steel"><label>Strand Pattern<input name="key" placeholder="e.g. 6T-9.53" maxlength="150" required /></label><label>Steel (kg/m)<input name="rate" type="number" min="0.000001" max="500" step="0.000001" inputmode="decimal" placeholder="From approved strand schedule" required /></label><button class="btn primary" type="submit">Save Strand Formula</button></form>` : ''}
+        ${formatList('steel','kg/m')}
+      </section>
+    </div>
+    <section class="formula-explanation"><h3>Calculation Method</h3><div class="explanation-grid"><div><b>Wastage (m)</b><span>Bed Length − Casting Length</span></div><div><b>Wastage Ratio</b><span>Wastage ÷ Bed Length × 100%</span></div><div><b>Concrete Volume (m³)</b><span>Casting Length × Volume (m³/m)</span></div><div><b>Steel Weight (kg)</b><span>Casting Length × Steel (kg/m)</span></div></div><p>Wastage is unused bed length (not concrete scrap volume). The steel coefficient must include the complete strand pattern weight per metre, not a single strand unless that is the whole pattern. No rates are prefilled.</p></section>`;
 }
 function editHistoryModal() {
   const c = state.cycles.find(x => x.id === state.modalCycle);
@@ -249,6 +309,9 @@ function editHistoryModal() {
       <select id="h-project" name="project_id" required>${state.projects.map(p => `<option value="${p.id}" ${Number(p.id) === Number(c.project_id) ? 'selected' : ''}>${esc(p.code)} - ${esc(p.name)}</option>`).join('')}</select>
       <div class="two-fields"><div><label class="field-label" for="h-height">Height (mm)</label><input id="h-height" name="height_mm" type="number" min="1" max="1000" step="0.1" value="${esc(c.height_mm)}" required /></div>
       <div><label class="field-label" for="h-strand">Strand Pattern</label><input id="h-strand" name="strand_pattern" value="${esc(c.strand_pattern)}" maxlength="150" required /></div></div>
+      <label class="field-label" for="h-casting-length">Casting Length (m)</label>
+      <input id="h-casting-length" name="casting_length_m" type="number" min="0.001" max="500" step="0.001" value="${esc(c.casting_length_m ?? '')}" placeholder="Older record: enter if available" />
+      <p class="field-note">Bed length is the snapshot at Preparation start: ${num(c.bed_length_m,2)} m. Changing the length recalculates wastage, concrete and steel from the saved coefficients.</p>
       <div class="edit-time-grid">${dateInput('prep_start','Preparation Start',c.prep_start)}${dateInput('prep_end','Preparation End',c.prep_end)}${dateInput('casting_start','Casting Start',c.casting_start)}${dateInput('casting_end','Casting End / Curing Start',c.casting_end)}${dateInput('cube_strength_updated_at','Cube Test Time',c.cube_strength_updated_at)}${dateInput('cut_start','Cut Start',c.cut_start)}${dateInput('cut_end','Cut & Demould Finish',c.cut_end)}</div>
       <label class="field-label" for="h-strength">Cube Strength (MPa)</label><input id="h-strength" type="number" min="0.01" max="250" step="0.01" name="cube_strength_mpa" value="${esc(c.cube_strength_mpa)}" required />
       <p class="field-note">All times use Singapore time. The casting completion timestamp also determines curing start. Previous data will remain in the audit log.</p>
@@ -286,8 +349,8 @@ function render() {
     app.innerHTML = `<div class="error-screen"><div class="error-panel">${ico('alert', 32)}<h1>Couldn't load production data</h1><p>${esc(state.loadError)}</p><p>Check your Supabase URL, publishable key and SQL setup in <code>README.md</code>.</p><button class="btn primary" data-action="retry">${ico('refresh', 17)} Retry connection</button></div></div>`;
     return;
   }
-  app.innerHTML = `<div class="app-shell">${header()}<main class="site-main">${nav()}${state.tab === 'overview' ? overview() : archive()}
-    <footer class="app-footer"><div><b>ICPH</b> / Production Control Center <span class="footer-divider">·</span> HCS Module v1.4</div><span>Timezone: ${TIMEZONE} · ${state.mode === 'demo' ? 'Local demonstration' : 'Cloud-connected'}</span></footer>
+  app.innerHTML = `<div class="app-shell">${header()}<main class="site-main">${nav()}${state.tab === 'overview' ? overview() : state.tab === 'archive' ? archive() : formulaPage()}
+    <footer class="app-footer"><div><b>ICPH</b> / Production Control Center <span class="footer-divider">·</span> HCS Module v1.5</div><span>Timezone: ${TIMEZONE} · ${state.mode === 'demo' ? 'Local demonstration' : 'Cloud-connected'}</span></footer>
     ${signedIn() ? `<button class="floating-add" data-action="show-project" title="Add Project">${ico('plus', 19)}<span>Add Project</span></button>` : ''}</main>${modal()}${lightbox()}${state.toast ? `<div class="toast ${state.toast.type}">${ico(state.toast.type === 'error' ? 'alert' : 'check', 18)}<span>${esc(state.toast.text)}</span><button data-action="dismiss-toast">${ico('x', 16)}</button></div>` : ''}</div>`;
 }
 function showToast(text, type = 'success') {
@@ -303,6 +366,7 @@ async function refresh() {
   state.projects = data.projects;
   state.cycles = data.cycles;
   state.photos = data.photos || [];
+  state.formulas = data.formulas || [];
   state.loadError = null;
   render();
 }
@@ -319,6 +383,9 @@ async function runAction(action) {
     if (action === 'start_preparation') {
       if (!(Number(state.height) > 0 && Number(state.height) <= 1000)) throw new Error('Enter a valid height (0-1000 mm).');
       if (!state.strandPattern.trim()) throw new Error('Enter strand pattern.');
+      if (!state.castingLength || !(Number(state.castingLength)>0)) throw new Error('Enter Casting Length in metres.');
+      // Validate against configured bed capacity on the client too; database rechecks.
+      computeMaterials({castingLengthM:Number(state.castingLength),bedLengthM:formulaRate(state.formulas,'bed_length',bed.bed_no),volumePerM:formulaRate(state.formulas,'volume',state.height),steelPerM:formulaRate(state.formulas,'steel',state.strandPattern)});
       const entry = parseProjectText(state.projectText, state.projects);
       let project = entry.project;
       if (entry.newProject) project = await state.repo.addProject(entry.newProject);
@@ -326,12 +393,13 @@ async function runAction(action) {
       p.projectId = projectId;
       p.heightMm = Number(state.height);
       p.strandPattern = state.strandPattern.trim();
+      p.castingLengthM = Number(state.castingLength);
     }
     if (action === 'set_cube_strength') p.cubeStrengthMpa = Number(state.strength);
     await state.repo.applyAction(p);
     state.manualTime = false;
     state.eventTime = singaporeDateTimeInput();
-    if (action === 'start_preparation') { state.projectText = ''; state.height = ''; state.strandPattern = ''; }
+    if (action === 'start_preparation') { state.projectText = ''; state.height = ''; state.strandPattern = ''; state.castingLength = ''; }
     if (action === 'set_cube_strength') state.strength = '';
     await refresh();
     const messages = {
@@ -358,9 +426,11 @@ async function addProject(code, name) {
 function exportCSV() {
   const rows = archiveRows();
   if (!rows.length) return showToast('No archived records to export', 'error');
-  const headers = ['Casting Date (SGT)', 'Bed', 'Project Code', 'Project Name', 'Height mm', 'Strand Pattern', 'Preparation Start (SGT)', 'Preparation End (SGT)', 'Preparation Minutes', 'Casting Start (SGT)', 'Casting End (SGT)', 'Casting Minutes', 'Curing Start (SGT)', 'Curing Hours', 'Cube Strength MPa', 'Strength Updated (SGT)', 'Cut Start (SGT)', 'Cut End (SGT)', 'Demould Minutes'];
+  const headers = ['Casting Date (SGT)', 'Bed', 'Project Code', 'Project Name', 'Height mm', 'Strand Pattern', 'Casting Length m', 'Bed Length m', 'Wastage m', 'Wastage %', 'Concrete Volume m3', 'Steel Weight kg', 'Preparation Start (SGT)', 'Preparation End (SGT)', 'Preparation Minutes', 'Casting Start (SGT)', 'Casting End (SGT)', 'Casting Minutes', 'Curing Start (SGT)', 'Curing Hours', 'Cube Strength MPa', 'Strength Updated (SGT)', 'Cut Start (SGT)', 'Cut End (SGT)', 'Demould Minutes'];
   const stamp = x => x ? `${singaporeDate(x)} ${singaporeTime(x, false)}` : '';
-  const values = rows.map(c => [singaporeDate(c.casting_start || c.prep_start), c.bed_no, c.project_code, c.project_name, c.height_mm, c.strand_pattern,
+  const values = rows.map(c => [singaporeDate(c.casting_start || c.prep_start), c.bed_no, c.project_code, c.project_name, c.height_mm, c.strand_pattern, c.casting_length_m, c.bed_length_m,
+    cycleMaterials(c)?.wastage_m, cycleMaterials(c)?.wastage_ratio == null ? '' : +(cycleMaterials(c).wastage_ratio*100).toFixed(2),
+    cycleMaterials(c)?.concrete_volume_m3, cycleMaterials(c)?.steel_weight_kg,
     stamp(c.prep_start), stamp(c.prep_end), Math.round(elapsed(c.prep_start, c.prep_end) / 60000),
     stamp(c.casting_start), stamp(c.casting_end), Math.round(elapsed(c.casting_start, c.casting_end) / 60000),
     stamp(c.curing_start), +(elapsed(c.curing_start, c.cut_start) / 3600000).toFixed(2),
@@ -451,6 +521,8 @@ app.addEventListener('click', async event => {
     }
     case 'tab-overview': state.tab = 'overview'; render(); break;
     case 'tab-archive': state.tab = 'archive'; render(); break;
+    case 'tab-formula': state.tab = 'formula'; render(); break;
+    case 'delete-formula': if (state.admin && confirm(`Remove formula ${target.dataset.formulaKey}? Previously saved cycles will not change.`)) { try {await state.repo.saveFormula(target.dataset.formulaKind,target.dataset.formulaKey,null); await refresh(); showToast('Formula removed');}catch(e){showToast(e.message,'error');} } break;
     case 'show-login': state.modal = 'login'; render(); break;
     case 'show-project': state.modal = 'project'; render(); break;
     case 'close-modal': state.modal = null; render(); break;
@@ -477,6 +549,9 @@ app.addEventListener('input', event => {
   if (!el.dataset.field) return;
   if (el.dataset.field === 'eventTime') state.manualTime = true;
   if (el.dataset.field !== 'selectedBed') state[el.dataset.field] = el.value;
+  if (['height','strandPattern','castingLength'].includes(el.dataset.field)) {
+    const preview=document.getElementById('material-preview'); if (preview) preview.innerHTML=materialsPreview();
+  }
 });
 app.addEventListener('change', event => {
   const el = event.target;
@@ -496,6 +571,15 @@ app.addEventListener('submit', async event => {
   const form = event.target;
   const values = new FormData(form);
   if (form.id === 'project-form') return addProject(values.get('code'), values.get('name'));
+  if (form.dataset.formulaKind) {
+    if (!state.admin) return showToast('Administrator permission required','error');
+    try { state.busy = true;
+      await state.repo.saveFormula(form.dataset.formulaKind,String(values.get('key')),Number(values.get('rate')));
+      await refresh(); showToast('Formula saved. New batches will use the updated rate.');
+    } catch (error) { showToast(error.message || 'Save failed','error'); }
+    finally {state.busy=false;}
+    return;
+  }
   if (form.id === 'history-form') {
     if (!state.admin) return showToast('Administrator login required', 'error');
     const c = state.cycles.find(row => row.id === form.dataset.cycleId);
@@ -506,7 +590,10 @@ app.addEventListener('submit', async event => {
         const selected = String(values.get(key));
         data[key] = selected === singaporeDateTimeInput(c[key]) ? c[key] : fromSingaporeInput(selected);
       }
-      for (const key of ['project_id','height_mm','strand_pattern','cube_strength_mpa']) data[key] = values.get(key);
+      for (const key of ['project_id','height_mm','strand_pattern','cube_strength_mpa','casting_length_m']) data[key] = values.get(key);
+      if (data.casting_length_m !== '') data.casting_length_m = Number(data.casting_length_m);
+      if (Number(data.height_mm) !== Number(c.height_mm)) data.concrete_m3_per_m = formulaRate(state.formulas,'volume',data.height_mm);
+      if (String(data.strand_pattern).trim().toUpperCase() !== String(c.strand_pattern).trim().toUpperCase()) data.steel_kg_per_m = formulaRate(state.formulas,'steel',data.strand_pattern);
       validateArchivedEdit(c, data);
       if (!confirm('Save changes to archived production history? An audit entry will be created.')) return;
       state.busy = true; render();
