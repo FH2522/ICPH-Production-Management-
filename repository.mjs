@@ -1,4 +1,4 @@
-import { applyDemoAction, archiveCutoff, BED_COUNT, previousStep, validateArchivedEdit } from './domain.mjs';
+import { applyDemoAction, archiveCutoff, BED_COUNT, previousStep, validateArchivedEdit, validateFormula, formulaRate, computeMaterials } from './domain.mjs';
 import { storeDemoPhoto, loadDemoPhoto } from './attachments.mjs';
 
 const STORE = 'icph-hcs-demo-v1';
@@ -11,7 +11,7 @@ const seed = () => ({
     { id: 2, code: '10124', name: 'New Maitri School', is_active: true },
     { id: 3, code: '10061', name: 'Project L', is_active: true }
   ],
-  cycles: [], events: [], photos: [], history_edits: []
+  cycles: [], events: [], photos: [], history_edits: [], formulas: []
 });
 let memory = seed();
 function readDemo() {
@@ -37,7 +37,7 @@ export function demoRepository() {
         }
         if (demoUrlCache.has(photo.id)) photos.push({ ...photo, url: demoUrlCache.get(photo.id) });
       }
-      return { beds: d.beds, projects: d.projects.filter(p => p.is_active), cycles, photos };
+      return { beds: d.beds, projects: d.projects.filter(p => p.is_active), cycles, photos, formulas: d.formulas || [] };
     },
     async getSession() { return { user: { email: 'Demo administrator' } }; },
     async isAdmin() { return true; },
@@ -53,11 +53,22 @@ export function demoRepository() {
       const prior = structuredClone(d.cycles[ix]);
       const project = d.projects.find(p => Number(p.id) === Number(fields.project_id));
       if (!project) throw new Error('Select a valid project.');
+      const rateHeight = Number(fields.height_mm) === Number(prior.height_mm) ? prior.concrete_m3_per_m : formulaRate(d.formulas, 'volume', fields.height_mm);
+      const rateSteel = String(fields.strand_pattern).trim().toUpperCase() === String(prior.strand_pattern).trim().toUpperCase() ? prior.steel_kg_per_m : formulaRate(d.formulas, 'steel', fields.strand_pattern);
+      const length = fields.casting_length_m == null || fields.casting_length_m === '' ? null : Number(fields.casting_length_m);
       d.cycles[ix] = validateArchivedEdit(prior, {
+        casting_length_m: length, concrete_m3_per_m:rateHeight ?? null, steel_kg_per_m:rateSteel ?? null,
         ...fields, project_code: project.code, project_name: project.name,
         height_mm: Number(fields.height_mm), cube_strength_mpa: Number(fields.cube_strength_mpa)
       });
       (d.history_edits ||= []).push({ cycle_id: cycleId, before: prior, after: d.cycles[ix], edited_at: new Date().toISOString() });
+      writeDemo(d);
+    },
+    async saveFormula(kind, key, rate) {
+      const item = validateFormula(kind, key, rate);
+      const d = readDemo(); d.formulas ||= [];
+      d.formulas = d.formulas.filter(r => !(r.kind === item.kind && r.key.toUpperCase() === item.key.toUpperCase()));
+      if (item.rate != null) d.formulas.push(item);
       writeDemo(d);
     },
     async uploadPhoto(cycleId, stage, file) {
@@ -103,7 +114,8 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
         client.from('hcs_projects').select('*').eq('is_active', true).order('code'),
         client.from('hcs_cycles').select('*')
           .is('cancelled_at', null).or(`cut_end.is.null,cut_end.gte.${since}`)
-          .order('created_at', { ascending: false }).limit(2000)
+          .order('created_at', { ascending: false }).limit(2000),
+        client.from('hcs_formula_rates').select('kind,key,rate').order('kind')
       ]);
       const cycles = unwrap(results[2]);
       let photos = [];
@@ -133,7 +145,7 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
           photos = records.map(p => ({ ...p, url: urlCache.get(p.storage_path)?.url || '' }));
         }
       }
-      return { beds: unwrap(results[0]), projects: unwrap(results[1]), cycles, photos };
+      return { beds: unwrap(results[0]), projects: unwrap(results[1]), cycles, photos, formulas: unwrap(results[3]) };
     },
     async getSession() { return unwrap(await client.auth.getSession()); },
     async isAdmin() { return Boolean(unwrap(await client.rpc('hcs_is_admin'))); },
@@ -143,7 +155,11 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
       const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => callback(session));
       return () => subscription.unsubscribe();
     },
-    async applyAction({ bedNo, action, at, projectId, heightMm, strandPattern, cubeStrengthMpa }) {
+    async applyAction({ bedNo, action, at, projectId, heightMm, strandPattern, castingLengthM, cubeStrengthMpa }) {
+      if (action === 'start_preparation') return unwrap(await client.rpc('hcs_begin_preparation_v15', {
+        p_bed_no:bedNo, p_at:at, p_project_id:projectId, p_height_mm:heightMm,
+        p_strand_pattern:strandPattern, p_casting_length_m:castingLengthM
+      }));
       return unwrap(await client.rpc('hcs_apply_action', {
         p_bed_no: bedNo, p_action: action, p_at: at,
         p_project_id: projectId ?? null, p_height_mm: heightMm ?? null,
@@ -152,12 +168,18 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
     },
     async backStep(bedNo) { return unwrap(await client.rpc('hcs_back_step', { p_bed_no: bedNo })); },
     async editHistory(cycleId, f) {
-      return unwrap(await client.rpc('hcs_edit_history', {
+      return unwrap(await client.rpc('hcs_edit_history_v15', {
         p_cycle_id: cycleId, p_project_id: Number(f.project_id), p_height_mm: Number(f.height_mm),
-        p_strand_pattern: f.strand_pattern, p_prep_start: f.prep_start, p_prep_end: f.prep_end,
+        p_strand_pattern: f.strand_pattern, p_casting_length_m:f.casting_length_m === '' ? null : f.casting_length_m, p_prep_start: f.prep_start, p_prep_end: f.prep_end,
         p_casting_start: f.casting_start, p_casting_end: f.casting_end, p_cut_start: f.cut_start,
         p_cut_end: f.cut_end, p_cube_strength_mpa: Number(f.cube_strength_mpa),
         p_cube_strength_updated_at: f.cube_strength_updated_at
+      }));
+    },
+    async saveFormula(kind, key, rate) {
+      const item = validateFormula(kind, key, rate);
+      return unwrap(await client.rpc('hcs_save_formula', {
+        p_kind:item.kind, p_key:item.key, p_rate:item.rate
       }));
     },
     async uploadPhoto(cycleId, stage, file) {
@@ -183,6 +205,7 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'hcs_cycles' }, listener)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'hcs_projects' }, listener)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'hcs_photos' }, listener)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'hcs_formula_rates' }, listener)
         .subscribe(status => { statusCallback?.(status); if (status === 'SUBSCRIBED') listener(); });
       return () => { clearTimeout(delay); client.removeChannel(channel); };
     }
