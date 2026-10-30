@@ -75,6 +75,47 @@ export function parseProjectText(text, projects) {
   if (existingCode) return { project: existingCode };
   return { newProject: { code: match[1], name: match[2].trim() } };
 }
+export const PHOTO_STAGES = [
+  ['preparation', 'Preparation'], ['casting', 'Casting'], ['curing', 'Curing'],
+  ['cutting', 'Cut & Demoulding'], ['cube_strength', 'Cube Strength']
+];
+export const PREVIOUS_STEPS = {
+  preparation: 'Available', ready_casting: 'Preparation', casting: 'Ready to Cast',
+  curing: 'Casting', cutting: 'Curing'
+};
+export function previousStep(data, bedNo) {
+  const next = structuredClone(data);
+  const bed = next.beds.find(x => x.bed_no === Number(bedNo));
+  if (!bed || bed.status === 'available') throw new Error('No previous production step is available.');
+  const c = next.cycles.find(x => x.id === bed.active_cycle_id);
+  if (!c) throw new Error('Active batch not found.');
+  const prior = bed.status;
+  switch (bed.status) {
+    case 'preparation': c.cancelled_at = new Date().toISOString(); bed.status = 'available'; bed.active_cycle_id = null; break;
+    case 'ready_casting': c.prep_end = null; bed.status = 'preparation'; break;
+    case 'casting': c.casting_start = null; bed.status = 'ready_casting'; break;
+    case 'curing': c.casting_end = null; c.curing_start = null; c.cube_strength_mpa = null; c.cube_strength_updated_at = null; bed.status = 'casting'; break;
+    case 'cutting': c.cut_start = null; bed.status = 'curing'; break;
+    default: throw new Error('Unsupported step.');
+  }
+  bed.updated_at = new Date().toISOString();
+  next.events.push({ cycle_id: c.id, bed_no: bedNo, action: 'back_to_last_step', from_status: prior, to_status: bed.status, event_at: bed.updated_at });
+  return next;
+}
+export function validateArchivedEdit(original, fields) {
+  if (!original?.cut_end) throw new Error('Only archived production records can be edited.');
+  const c = { ...original, ...fields };
+  if (!(Number(c.height_mm) > 0 && Number(c.height_mm) <= 1000)) throw new Error('Invalid height.');
+  if (!String(c.strand_pattern || '').trim()) throw new Error('Strand pattern is required.');
+  const names = ['prep_start', 'prep_end', 'casting_start', 'casting_end', 'cut_start', 'cut_end'];
+  const values = names.map(k => +new Date(c[k]));
+  if (values.some(v => !Number.isFinite(v)) || values.some((v,i) => i && v < values[i-1])) throw new Error('Production timestamps must follow the process order.');
+  if (values.at(-1) > Date.now() + 60000) throw new Error('Completion cannot be in the future.');
+  if (!(Number(c.cube_strength_mpa) > 0 && Number(c.cube_strength_mpa) <= 250)) throw new Error('Invalid cube strength.');
+  const cube = +new Date(c.cube_strength_updated_at);
+  if (!Number.isFinite(cube) || cube < values[3] || cube > values[4]) throw new Error('Cube test time must be between casting completion and start of cutting.');
+  return { ...c, curing_start: c.casting_end };
+}
 const checkTime = (when, previous) => {
   const time = +new Date(when);
   if (!Number.isFinite(time) || time > Date.now() + 60000) throw new Error('Event time must be valid and not in the future.');
