@@ -75,6 +75,44 @@ export function parseProjectText(text, projects) {
   if (existingCode) return { project: existingCode };
   return { newProject: { code: match[1], name: match[2].trim() } };
 }
+// Snapshot the material-rate settings for each production cycle.
+export function formulaRate(rates, kind, key) {
+  const raw = String(key ?? '').trim().toUpperCase();
+  const k = kind === 'volume' && Number(raw) > 0 ? String(Number(raw)) : raw;
+  const row = (rates || []).find(r => r.kind === kind && String(r.key).trim().toUpperCase() === k);
+  return row && Number(row.rate) > 0 ? Number(row.rate) : null;
+}
+export function computeMaterials({ castingLengthM, bedLengthM, volumePerM, steelPerM }) {
+  const length = Number(castingLengthM);
+  const bed = bedLengthM == null ? null : Number(bedLengthM);
+  const volume = volumePerM == null ? null : Number(volumePerM);
+  const steel = steelPerM == null ? null : Number(steelPerM);
+  if (!Number.isFinite(length) || length <= 0 || length > 500) throw new Error('Casting Length must be between 0 and 500 m.');
+  if (bed != null && (!Number.isFinite(bed) || bed <= 0 || length > bed + 1e-9)) throw new Error('Casting Length cannot exceed the configured Bed Length.');
+  return {
+    casting_length_m: length,
+    bed_length_m: bed,
+    concrete_m3_per_m: volume,
+    steel_kg_per_m: steel,
+    wastage_m: bed == null ? null : Math.max(0, bed - length),
+    wastage_ratio: bed == null ? null : Math.max(0, (bed-length)/bed),
+    concrete_volume_m3: volume == null ? null : length * volume,
+    steel_weight_kg: steel == null ? null : length * steel
+  };
+}
+export function cycleMaterials(c) {
+  if (!c || c.casting_length_m == null) return null;
+  return computeMaterials({ castingLengthM:c.casting_length_m, bedLengthM:c.bed_length_m, volumePerM:c.concrete_m3_per_m, steelPerM:c.steel_kg_per_m });
+}
+export function validateFormula(kind, key, rate) {
+  const k = String(key ?? '').trim();
+  if (!['bed_length','volume','steel'].includes(kind)) throw new Error('Unsupported formula type.');
+  if (!k || k.length > 150) throw new Error('Formula key is required (max 150 characters).');
+  if (kind === 'bed_length' && !['1','2','3','4','5'].includes(k)) throw new Error('Choose Bed 1–5.');
+  if (kind === 'volume' && !(Number(k)>0 && Number(k)<=1000)) throw new Error('Height must be between 0 and 1000 mm.');
+  if (rate != null && !(Number(rate)>0 && Number(rate)<=500)) throw new Error('Formula rate must be greater than 0 and at most 500.');
+  return {kind, key: kind === 'steel' ? k.toUpperCase() : kind === 'volume' ? String(Number(k)) : k, rate: rate == null ? null : Number(rate)};
+}
 export const PHOTO_STAGES = [
   ['preparation', 'Preparation'], ['casting', 'Casting'], ['curing', 'Curing'],
   ['cutting', 'Cut & Demoulding'], ['cube_strength', 'Cube Strength']
@@ -107,6 +145,7 @@ export function validateArchivedEdit(original, fields) {
   const c = { ...original, ...fields };
   if (!(Number(c.height_mm) > 0 && Number(c.height_mm) <= 1000)) throw new Error('Invalid height.');
   if (!String(c.strand_pattern || '').trim()) throw new Error('Strand pattern is required.');
+  if (c.casting_length_m != null) computeMaterials({castingLengthM:c.casting_length_m,bedLengthM:c.bed_length_m,volumePerM:c.concrete_m3_per_m,steelPerM:c.steel_kg_per_m});
   const names = ['prep_start', 'prep_end', 'casting_start', 'casting_end', 'cut_start', 'cut_end'];
   const values = names.map(k => +new Date(c[k]));
   if (values.some(v => !Number.isFinite(v)) || values.some((v,i) => i && v < values[i-1])) throw new Error('Production timestamps must follow the process order.');
@@ -121,7 +160,7 @@ const checkTime = (when, previous) => {
   if (!Number.isFinite(time) || time > Date.now() + 60000) throw new Error('Event time must be valid and not in the future.');
   if (previous && time < +new Date(previous)) throw new Error('Event time must not be earlier than the preceding stage.');
 };
-export function applyDemoAction(data, { bedNo, action, at, projectId, heightMm, strandPattern, cubeStrengthMpa }) {
+export function applyDemoAction(data, { bedNo, action, at, projectId, heightMm, strandPattern, castingLengthM, cubeStrengthMpa }) {
   const next = structuredClone(data);
   const bed = next.beds.find(x => x.bed_no === Number(bedNo));
   if (!bed) throw new Error('Bed not found.');
@@ -133,10 +172,12 @@ export function applyDemoAction(data, { bedNo, action, at, projectId, heightMm, 
     if (!project) throw new Error('Select a valid project.');
     if (!(Number(heightMm) > 0 && Number(heightMm) <= 1000)) throw new Error('Height must be between 0 and 1000 mm.');
     if (!String(strandPattern || '').trim()) throw new Error('Enter a strand pattern.');
+    const materials = computeMaterials({ castingLengthM, bedLengthM:formulaRate(next.formulas,'bed_length',bedNo), volumePerM:formulaRate(next.formulas,'volume',heightMm), steelPerM:formulaRate(next.formulas,'steel',strandPattern) });
     const record = {
       id: globalThis.crypto?.randomUUID?.() || 'cycle-' + Math.random().toString(36).slice(2),
       bed_no: bed.bed_no, project_id: project.id, project_code: project.code, project_name: project.name,
       height_mm: Number(heightMm), strand_pattern: String(strandPattern).trim(),
+      casting_length_m: materials.casting_length_m, bed_length_m: materials.bed_length_m, concrete_m3_per_m: materials.concrete_m3_per_m, steel_kg_per_m: materials.steel_kg_per_m,
       prep_start: at, prep_end: null, casting_start: null, casting_end: null,
       curing_start: null, cut_start: null, cut_end: null, cube_strength_mpa: null,
       cube_strength_updated_at: null, created_at: at
