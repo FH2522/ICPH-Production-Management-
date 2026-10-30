@@ -1,6 +1,9 @@
-import { applyDemoAction, archiveCutoff, BED_COUNT } from './domain.mjs';
+import { applyDemoAction, archiveCutoff, BED_COUNT, previousStep, validateArchivedEdit } from './domain.mjs';
+import { storeDemoPhoto, loadDemoPhoto } from './attachments.mjs';
 
 const STORE = 'icph-hcs-demo-v1';
+const demoUrlCache = new Map();
+const newId = () => globalThis.crypto?.randomUUID?.() || `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const seed = () => ({
   beds: Array.from({ length: BED_COUNT }, (_, i) => ({ bed_no: i + 1, status: 'available', active_cycle_id: null, updated_at: new Date().toISOString() })),
   projects: [
@@ -8,7 +11,7 @@ const seed = () => ({
     { id: 2, code: '10124', name: 'New Maitri School', is_active: true },
     { id: 3, code: '10061', name: 'Project L', is_active: true }
   ],
-  cycles: [], events: []
+  cycles: [], events: [], photos: [], history_edits: []
 });
 let memory = seed();
 function readDemo() {
@@ -24,14 +27,48 @@ export function demoRepository() {
     mode: 'demo',
     async getData() {
       const d = readDemo();
-      return { beds: d.beds, projects: d.projects.filter(p => p.is_active),
-        cycles: d.cycles.filter(c => !c.cut_end || c.cut_end >= archiveCutoff()) };
+      const cycles = d.cycles.filter(c => !c.cancelled_at && (!c.cut_end || c.cut_end >= archiveCutoff()));
+      const photos = [];
+      for (const photo of d.photos || []) {
+        if (!cycles.some(c => c.id === photo.cycle_id)) continue;
+        if (!demoUrlCache.has(photo.id)) {
+          const blob = await loadDemoPhoto(photo.id);
+          if (blob) demoUrlCache.set(photo.id, URL.createObjectURL(blob));
+        }
+        if (demoUrlCache.has(photo.id)) photos.push({ ...photo, url: demoUrlCache.get(photo.id) });
+      }
+      return { beds: d.beds, projects: d.projects.filter(p => p.is_active), cycles, photos };
     },
-    async getSession() { return { user: { email: 'Demo supervisor' } }; },
+    async getSession() { return { user: { email: 'Demo administrator' } }; },
+    async isAdmin() { return true; },
     async signIn() { return { user: { email: 'Demo supervisor' } }; },
     async signOut() {},
     onAuthChange() { return () => {}; },
     async applyAction(payload) { writeDemo(applyDemoAction(readDemo(), payload)); },
+    async backStep(bedNo) { writeDemo(previousStep(readDemo(), bedNo)); },
+    async editHistory(cycleId, fields) {
+      const d = readDemo();
+      const ix = d.cycles.findIndex(c => c.id === cycleId);
+      if (ix === -1) throw new Error('Production record not found.');
+      const prior = structuredClone(d.cycles[ix]);
+      const project = d.projects.find(p => Number(p.id) === Number(fields.project_id));
+      if (!project) throw new Error('Select a valid project.');
+      d.cycles[ix] = validateArchivedEdit(prior, {
+        ...fields, project_code: project.code, project_name: project.name,
+        height_mm: Number(fields.height_mm), cube_strength_mpa: Number(fields.cube_strength_mpa)
+      });
+      (d.history_edits ||= []).push({ cycle_id: cycleId, before: prior, after: d.cycles[ix], edited_at: new Date().toISOString() });
+      writeDemo(d);
+    },
+    async uploadPhoto(cycleId, stage, file) {
+      const d = readDemo();
+      if (!d.cycles.some(c => c.id === cycleId)) throw new Error('Batch not found.');
+      const photo = { id: newId(), cycle_id: cycleId, stage, created_at: new Date().toISOString(), uploaded_by: 'demo' };
+      await storeDemoPhoto(photo.id, file);
+      (d.photos ||= []).push(photo);
+      writeDemo(d);
+      return photo;
+    },
     async addProject({ code, name }) {
       const d = readDemo();
       code = String(code).trim(); name = String(name).trim();
@@ -52,6 +89,7 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
   const client = createClient(supabaseUrl, supabaseAnonKey, {
     auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: false }
   });
+  const urlCache = new Map();
   const unwrap = ({ data, error }) => {
     if (error) throw new Error(error.message);
     return data;
@@ -64,12 +102,41 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
         client.from('hcs_beds').select('*').order('bed_no', { ascending: true }),
         client.from('hcs_projects').select('*').eq('is_active', true).order('code'),
         client.from('hcs_cycles').select('*')
-          .or(`cut_end.is.null,cut_end.gte.${since}`)
+          .is('cancelled_at', null).or(`cut_end.is.null,cut_end.gte.${since}`)
           .order('created_at', { ascending: false }).limit(2000)
       ]);
-      return { beds: unwrap(results[0]), projects: unwrap(results[1]), cycles: unwrap(results[2]) };
+      const cycles = unwrap(results[2]);
+      let photos = [];
+      const { data: { session } } = await client.auth.getSession();
+      if (session) {
+        const ids = cycles.map(c => c.id);
+        if (ids.length) {
+          // Batch UUID filter to avoid overlong URLs on busy factory months.
+          const records = [];
+          for (let index = 0; index < ids.length; index += 75) {
+            const idBatch = ids.slice(index, index + 75);
+            for (let offset = 0; offset < 5000; offset += 500) {
+              const batch = unwrap(await client.from('hcs_photos').select('*').in('cycle_id', idBatch)
+                .order('created_at', { ascending: false }).range(offset, offset + 499));
+              records.push(...batch);
+              if (batch.length < 500) break;
+            }
+          }
+          const missing = [...new Set(records.map(p => p.storage_path).filter(path => !urlCache.has(path) || urlCache.get(path).expiry < Date.now()))];
+          if (missing.length) {
+            for (let i = 0; i < missing.length; i += 100) {
+              const paths = missing.slice(i, i + 100);
+              const signed = unwrap(await client.storage.from('hcs-photos').createSignedUrls(paths, 3600));
+              signed.forEach((item, j) => { if (item.signedUrl) urlCache.set(paths[j], { url: item.signedUrl, expiry: Date.now() + 45 * 60000 }); });
+            }
+          }
+          photos = records.map(p => ({ ...p, url: urlCache.get(p.storage_path)?.url || '' }));
+        }
+      }
+      return { beds: unwrap(results[0]), projects: unwrap(results[1]), cycles, photos };
     },
     async getSession() { return unwrap(await client.auth.getSession()); },
+    async isAdmin() { return Boolean(unwrap(await client.rpc('hcs_is_admin'))); },
     async signIn(email, password) { return unwrap(await client.auth.signInWithPassword({ email, password })); },
     async signOut() { return unwrap(await client.auth.signOut()); },
     onAuthChange(callback) {
@@ -83,6 +150,28 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
         p_strand_pattern: strandPattern ?? null, p_cube_strength_mpa: cubeStrengthMpa ?? null
       }));
     },
+    async backStep(bedNo) { return unwrap(await client.rpc('hcs_back_step', { p_bed_no: bedNo })); },
+    async editHistory(cycleId, f) {
+      return unwrap(await client.rpc('hcs_edit_history', {
+        p_cycle_id: cycleId, p_project_id: Number(f.project_id), p_height_mm: Number(f.height_mm),
+        p_strand_pattern: f.strand_pattern, p_prep_start: f.prep_start, p_prep_end: f.prep_end,
+        p_casting_start: f.casting_start, p_casting_end: f.casting_end, p_cut_start: f.cut_start,
+        p_cut_end: f.cut_end, p_cube_strength_mpa: Number(f.cube_strength_mpa),
+        p_cube_strength_updated_at: f.cube_strength_updated_at
+      }));
+    },
+    async uploadPhoto(cycleId, stage, file) {
+      const { data: { user }, error: authError } = await client.auth.getUser();
+      if (authError || !user) throw new Error('Log in before uploading photos.');
+      const name = `${user.id}/${cycleId}/${stage}/${newId()}.jpg`;
+      unwrap(await client.storage.from('hcs-photos').upload(name, file, { cacheControl: '3600', upsert: false, contentType: 'image/jpeg' }));
+      try {
+        return unwrap(await client.rpc('hcs_add_photo', { p_cycle_id: cycleId, p_stage: stage, p_storage_path: name }));
+      } catch (error) {
+        await client.storage.from('hcs-photos').remove([name]).catch(() => {});
+        throw error;
+      }
+    },
     async addProject({ code, name }) {
       return unwrap(await client.rpc('hcs_add_project', { p_code: code, p_name: name }));
     },
@@ -93,6 +182,7 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'hcs_beds' }, listener)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'hcs_cycles' }, listener)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'hcs_projects' }, listener)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'hcs_photos' }, listener)
         .subscribe(status => { statusCallback?.(status); if (status === 'SUBSCRIBED') listener(); });
       return () => { clearTimeout(delay); client.removeChannel(channel); };
     }
