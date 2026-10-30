@@ -24,7 +24,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -37,12 +36,15 @@ jobs:
           mkdir -p _site/src _check/src _check/tests
           cp index.html config.js _site/
 
+          # Support either a src/ folder or your current flat repository layout.
           if [[ -f src/main.mjs && -f src/domain.mjs && -f src/repository.mjs && -f src/styles.css ]]; then
             echo 'Found structured source files under src/'
             cp src/main.mjs src/domain.mjs src/repository.mjs src/styles.css _site/src/
+            if [[ -f src/attachments.mjs ]]; then cp src/attachments.mjs _site/src/; fi
           else
-            echo 'Found flattened files in repository root; reorganizing for deployment.'
+            echo 'Found flattened source files in repository root.'
             cp main.mjs domain.mjs repository.mjs styles.css _site/src/
+            if [[ -f attachments.mjs ]]; then cp attachments.mjs _site/src/; fi
           fi
 
           if [[ -f tests/domain.test.mjs ]]; then
@@ -52,11 +54,16 @@ jobs:
           fi
           cp _site/src/domain.mjs _check/src/
 
+          # Verify that every local JS module imported by the deployed app exists.
           node --check _site/src/main.mjs
           node --check _site/src/domain.mjs
           node --check _site/src/repository.mjs
+          if [[ -f _site/src/attachments.mjs ]]; then node --check _site/src/attachments.mjs; fi
+          node --input-type=module -e "import('./_site/src/repository.mjs').then(() => console.log('All repository module imports resolved'))"
           node --test _check/tests/domain.test.mjs
           touch _site/.nojekyll
+          echo 'Deployment files:'
+          ls -la _site/src/
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
