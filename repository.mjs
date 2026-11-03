@@ -27,7 +27,7 @@ export function demoRepository() {
     mode: 'demo',
     async getData() {
       const d = readDemo();
-      const cycles = d.cycles.filter(c => !c.cancelled_at && (!c.cut_end || c.cut_end >= archiveCutoff()));
+      const cycles = d.cycles.filter(c => !c.cancelled_at && !c.deleted_at && (!c.cut_end || c.cut_end >= archiveCutoff()));
       const photos = [];
       for (const photo of d.photos || []) {
         if (!cycles.some(c => c.id === photo.cycle_id)) continue;
@@ -41,6 +41,8 @@ export function demoRepository() {
     },
     async getSession() { return { user: { email: 'Demo administrator' } }; },
     async isAdmin() { return true; },
+    async getRole() { return 'admin'; },
+    async verifyViewerCode() { throw new Error('Verification is used only in live mode.'); },
     async signIn() { return { user: { email: 'Demo supervisor' } }; },
     async signOut() {},
     onAuthChange() { return () => {}; },
@@ -63,6 +65,18 @@ export function demoRepository() {
       });
       (d.history_edits ||= []).push({ cycle_id: cycleId, before: prior, after: d.cycles[ix], edited_at: new Date().toISOString() });
       writeDemo(d);
+    },
+    async deleteHistory(cycleId, reason) {
+      const data = readDemo();
+      const cycle = data.cycles.find(c => c.id === cycleId);
+      if (!cycle || !cycle.cut_end || cycle.cancelled_at || cycle.deleted_at) throw new Error('Only completed summary records can be deleted.');
+      if (String(reason || '').trim().length < 5) throw new Error('Enter a deletion reason.');
+      const prior = structuredClone(cycle);
+      cycle.deleted_at = new Date().toISOString();
+      cycle.deleted_by = 'demo-admin';
+      cycle.deletion_reason = reason.trim();
+      (data.history_edits ||= []).push({ cycle_id: cycleId, before: prior, after: structuredClone(cycle), edited_at: new Date().toISOString(), action: 'delete_summary' });
+      writeDemo(data);
     },
     async saveFormula(kind, key, rate) {
       const item = validateFormula(kind, key, rate);
@@ -113,7 +127,7 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
         client.from('hcs_beds').select('*').order('bed_no', { ascending: true }),
         client.from('hcs_projects').select('*').eq('is_active', true).order('code'),
         client.from('hcs_cycles').select('*')
-          .is('cancelled_at', null).or(`cut_end.is.null,cut_end.gte.${since}`)
+          .is('cancelled_at', null).is('deleted_at', null).or(`cut_end.is.null,cut_end.gte.${since}`)
           .order('created_at', { ascending: false }).limit(2000),
         client.from('hcs_formula_rates').select('kind,key,rate').order('kind')
       ]);
@@ -149,6 +163,18 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
     },
     async getSession() { return unwrap(await client.auth.getSession()); },
     async isAdmin() { return Boolean(unwrap(await client.rpc('hcs_is_admin'))); },
+    async getRole() { return String(unwrap(await client.rpc('hcs_my_role')) || 'none'); },
+    async verifyViewerCode(code) {
+      const url = `${supabaseUrl.replace(/\/$/, '')}/functions/v1/icph-viewer`;
+      const response = await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }), cache: 'no-store'
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Verification failed.');
+      if (!Array.isArray(result.rows) || !Array.isArray(result.beds)) throw new Error('Invalid viewer response.');
+      return result;
+    },
     async signIn(email, password) { return unwrap(await client.auth.signInWithPassword({ email, password })); },
     async signOut() { return unwrap(await client.auth.signOut()); },
     onAuthChange(callback) {
@@ -175,6 +201,9 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
         p_cut_end: f.cut_end, p_cube_strength_mpa: Number(f.cube_strength_mpa),
         p_cube_strength_updated_at: f.cube_strength_updated_at
       }));
+    },
+    async deleteHistory(cycleId, reason) {
+      return unwrap(await client.rpc('hcs_delete_history', { p_cycle_id: cycleId, p_reason: reason }));
     },
     async saveFormula(kind, key, rate) {
       const item = validateFormula(kind, key, rate);
