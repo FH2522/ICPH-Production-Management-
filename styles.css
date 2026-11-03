@@ -149,3 +149,39 @@
 @media(max-width:760px){.formula-layout{grid-template-columns:1fr}.formula-help{padding:11px}.formula-card-top p{min-height:auto}.explanation-grid{grid-template-columns:1fr 1fr;gap:7px}.view-nav{gap:2px}.view-tab{font-size:10px;padding:0 6px}.material-preview-grid strong{font-size:13px}}
 
 @media(max-width:760px){.view-nav{height:auto;min-height:42px;justify-content:flex-start;row-gap:4px;flex-wrap:wrap;padding:0 0 6px}.view-tab{min-height:35px}.formula-number{min-width:0}}
+
+
+/* v1.6 — PCPL factory brand + HCS photograph in header. Layout only. */
+.topbar{position:relative;isolation:isolate;overflow:hidden;background:#111d32;}
+.topbar::before{
+  content:"";position:absolute;pointer-events:none;z-index:0;
+  top:0;bottom:0;left:21%;right:23%;
+  background-image:linear-gradient(90deg,#111d32 0%,rgba(17,29,50,.25) 24%,rgba(17,29,50,.16) 64%,#111d32 100%),
+                   linear-gradient(0deg,rgba(17,29,50,.20),rgba(17,29,50,.28)),
+                   url('./hcs-header.webp');
+  background-position:center,center,center 53%;
+  background-size:cover;
+  background-repeat:no-repeat;
+  opacity:.94;
+  -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 16%,#000 75%,transparent 100%);
+  mask-image:linear-gradient(90deg,transparent 0%,#000 16%,#000 75%,transparent 100%);
+}
+.topbar-content{position:relative;z-index:1;}
+.brand{position:relative;z-index:2;}
+.brand-mark{
+  width:57px;height:57px;flex:0 0 57px;
+  background:#fff url('./pcpl-logo.webp') center/contain no-repeat;
+  border:1px solid rgba(255,255,255,.75);border-radius:9px;
+  box-shadow:0 3px 13px rgba(0,0,0,.26);
+}
+.brand-mark svg{display:none;}
+.topbar-actions{position:relative;z-index:2;}
+@media(max-width:900px){
+  .topbar::before{left:27%;right:15%;opacity:.42;}
+  .brand-mark{width:49px;height:49px;flex-basis:49px;}
+}
+@media(max-width:680px){
+  .topbar::before{left:18%;right:0;opacity:.23;}
+  .brand-mark{width:39px;height:39px;flex-basis:39px;border-radius:6px;}
+  .brand{gap:8px;}
+}
