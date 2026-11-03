@@ -39,18 +39,29 @@ jobs:
           # Support either a src/ folder or your current flat repository layout.
           if [[ -f src/main.mjs && -f src/domain.mjs && -f src/repository.mjs && -f src/styles.css ]]; then
             echo 'Found structured source files under src/'
-            cp src/main.mjs src/domain.mjs src/repository.mjs src/styles.css _site/src/
-            if [[ -f src/attachments.mjs ]]; then cp src/attachments.mjs _site/src/; fi
+            cp src/*.mjs src/styles.css _site/src/
           else
             echo 'Found flattened source files in repository root.'
-            cp main.mjs domain.mjs repository.mjs styles.css _site/src/
-            if [[ -f attachments.mjs ]]; then cp attachments.mjs _site/src/; fi
+            cp ./*.mjs styles.css _site/src/
           fi
 
-          if [[ -f tests/domain.test.mjs ]]; then
-            cp tests/domain.test.mjs _check/tests/
+          # Header images are published beside styles.css in _site/src/.
+          # The source repository currently keeps these image files at its root.
+          for asset in pcpl-logo.webp hcs-header.webp; do
+            if [[ -f "$asset" ]]; then
+              cp "$asset" _site/src/
+            elif [[ -f "src/$asset" ]]; then
+              cp "src/$asset" _site/src/
+            else
+              echo "ERROR: missing header image $asset" >&2
+              exit 1
+            fi
+          done
+
+          if compgen -G 'tests/*.test.mjs' >/dev/null; then
+            cp tests/*.test.mjs _check/tests/
           else
-            cp domain.test.mjs _check/tests/
+            cp ./*.test.mjs _check/tests/
           fi
           cp _site/src/domain.mjs _check/src/
 
@@ -60,7 +71,7 @@ jobs:
           node --check _site/src/repository.mjs
           if [[ -f _site/src/attachments.mjs ]]; then node --check _site/src/attachments.mjs; fi
           node --input-type=module -e "import('./_site/src/repository.mjs').then(() => console.log('All repository module imports resolved'))"
-          node --test _check/tests/domain.test.mjs
+          node --test _check/tests/*.test.mjs
           touch _site/.nojekyll
           echo 'Deployment files:'
           ls -la _site/src/
