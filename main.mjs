@@ -3,14 +3,14 @@ import {
   singaporeDateTimeInput, fromSingaporeInput, elapsed, duration, stageDuration,
   parseProjectText, validateArchivedEdit, PHOTO_STAGES, PREVIOUS_STEPS, formulaRate, computeMaterials, cycleMaterials, escapeHtml as esc
 } from './domain.mjs';
-import { demoRepository, supabaseRepository } from './repository.mjs';
+import { demoRepository, supabaseRepository } from './repository.mjs?v=1.7.2';
 
 const app = document.getElementById('app');
 const conf = window.ICPH_CONFIG || {};
 const configured = Boolean(conf.supabaseUrl?.trim() && conf.supabaseAnonKey?.trim());
 const state = {
   repo: null, mode: configured ? 'live' : 'demo', session: null,
-  beds: [], projects: [], cycles: [], photos: [], formulas: [], admin: false, selectedBed: 1, tab: 'overview',
+  beds: [], projects: [], cycles: [], photos: [], formulas: [], admin: false, role: 'none', viewerCode: '', viewerData: null, selectedBed: 1, tab: 'overview',
   busy: false, online: configured ? 'CONNECTING' : 'DEMO',
   modal: null, toast: null, projectText: '', height: '', strandPattern: '', castingLength: '', strength: '',
   eventTime: singaporeDateTimeInput(), manualTime: false,
@@ -49,10 +49,11 @@ const icons = {
 const ico = (name, size = 18) => `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.grid}</svg>`;
 const bedByNumber = n => state.beds.find(b => b.bed_no === Number(n));
 const cycleForBed = b => state.cycles.find(c => c.id === b?.active_cycle_id);
-const signedIn = () => state.mode === 'demo' || Boolean(state.session?.user);
+const signedIn = () => state.mode === 'demo' || (Boolean(state.session?.user) && ['admin','supervisor'].includes(state.role));
+const viewerActive = () => state.mode === 'live' && !signedIn() && Boolean(state.viewerCode);
 const cyclePhotos = (id, stage) => state.photos.filter(p => p.cycle_id === id && (!stage || p.stage === stage));
 const today = () => singaporeDate();
-const allArchived = () => state.cycles.filter(c => c.cut_end).filter(c => +new Date(c.cut_end) > Date.now() - HISTORY_DAYS * 86400000);
+const allArchived = () => state.cycles.filter(c => c.cut_end && !c.deleted_at).filter(c => +new Date(c.cut_end) > Date.now() - HISTORY_DAYS * 86400000);
 const castToday = () => state.cycles.filter(c => c.casting_start && singaporeDate(c.casting_start) === today());
 const statValue = (count, title, detail, icon, style) => `<article class="kpi-card ${style}"><div class="kpi-top"><span>${esc(title)}</span><span class="kpi-icon">${ico(icon, 19)}</span></div><div class="kpi-number">${count}<small> ${detail}</small></div></article>`;
 
@@ -73,7 +74,7 @@ function materialsMini(c) {
 }
 function materialsPreview() {
   const { numbers:m, bedLen, vol, steel, error } = materialForInput();
-  return `<div class="material-preview-head"><strong>Automatic Material Calculation</strong><button type="button" data-action="tab-formula" class="text-button">Formula Settings</button></div>
+  return `<div class="material-preview-head"><strong>Automatic Material Calculation</strong>${state.admin ? `<button type="button" data-action="tab-formula" class="text-button">Formula Settings</button>` : ''}</div>
     <div class="material-preview-grid">
       <div><span>Default Bed Length</span><strong>${num(bedLen,2)} m</strong></div>
       <div><span>Wastage</span><strong>${num(m?.wastage_m,2)} m</strong></div>
@@ -93,9 +94,9 @@ function header() {
     <div class="brand"><div class="brand-mark">${ico('layers', 25)}</div><div><div class="brand-name">ICPH<span class="brand-pipe"> / </span><span class="brand-app">PRODUCTION</span></div><div class="brand-subtitle">Production Management System</div></div></div>
     <div class="topbar-actions">
       <span class="date-display">${ico('calendar', 15)} <span id="sg-date">${esc(today())}</span></span>
-      <span class="live-indicator ${state.mode === 'demo' ? 'demo' : state.online === 'SUBSCRIBED' ? 'connected' : 'offline'}"><i></i>${state.mode === 'demo' ? 'LOCAL DEMO' : state.online === 'SUBSCRIBED' ? 'LIVE SYNC' : 'SYNC ' + esc(state.online)}</span>
+      <span class="live-indicator ${state.mode === 'demo' ? 'demo' : state.online === 'SUBSCRIBED' ? 'connected' : 'offline'}"><i></i>${state.mode === 'demo' ? 'LOCAL DEMO' : viewerActive() ? 'VIEW ONLY' : state.online === 'SUBSCRIBED' ? 'LIVE SYNC' : 'SYNC ' + esc(state.online)}</span>
       <span class="topbar-time" id="sg-clock">${esc(singaporeTime(new Date(), false))} SGT</span>
-      ${signedIn() ? `<button class="head-user" data-action="${state.mode === 'demo' ? 'noop' : 'sign-out'}" title="${state.mode === 'demo' ? 'Local demonstration account' : 'Sign out'}">${ico('users', 16)} <span>${esc(state.session?.user?.email || 'Demo supervisor')}</span>${state.mode === 'live' ? ico('logout', 14) : ''}</button>` : `<button class="head-login" data-action="show-login">${ico('log', 16)} Supervisor login</button>`}
+      ${signedIn() ? `<button class="head-user" data-action="${state.mode === 'demo' ? 'noop' : 'sign-out'}" title="${state.mode === 'demo' ? 'Local demonstration account' : 'Sign out'}">${ico('users', 16)} <span>${esc(state.session?.user?.email || 'Demo administrator')}</span>${state.mode === 'live' ? ico('logout', 14) : ''}</button>` : viewerActive() ? `<button class="head-user" data-action="lock-viewer" title="Lock today's casting view">${ico('shield',16)} <span>VIEW ONLY · Lock</span></button><button class="head-login" data-action="show-login">Staff login</button>` : `<button class="head-login" data-action="show-login">${ico('log', 16)} Staff login</button>`}
     </div></div></header>`;
 }
 function nav() {
@@ -105,7 +106,7 @@ function nav() {
   </div><div class="view-nav">
     <button class="view-tab ${state.tab === 'overview' ? 'active' : ''}" data-action="tab-overview">${ico('grid', 17)} Live Production</button>
     <button class="view-tab ${state.tab === 'archive' ? 'active' : ''}" data-action="tab-archive">${ico('history', 17)} Daily Production Summary <span class="tab-count">${allArchived().length}</span></button>
-    <button class="view-tab ${state.tab === 'formula' ? 'active' : ''}" data-action="tab-formula">${ico('wrench', 17)} Formula Settings</button>
+    ${state.admin ? `<button class="view-tab ${state.tab === 'formula' ? 'active' : ''}" data-action="tab-formula">${ico('wrench', 17)} Formula Settings</button>` : ''}
   </div></nav>`;
 }
 function timeline(b, c) {
@@ -271,7 +272,7 @@ function archive() {
         <div class="filter-group search-filter"><label for="archive-search">Search project / bed / strand</label><input id="archive-search" type="search" data-field="archiveSearch" placeholder="Search production records..." value="${esc(state.archiveSearch)}" /></div>
         <button class="reset-filter" data-action="clear-filters">Clear filters</button></div>
       <div class="table-scroll"><table class="archive-table"><thead><tr><th>CAST DATE</th><th>BED</th><th>PROJECT</th><th>HEIGHT</th><th>STRAND</th><th>PREPARATION</th><th>CASTING</th><th>CURING</th><th>CUBE (MPa)</th><th>CUT & DEMOULD</th><th>COMPLETED (SGT)</th><th>LENGTH (m)</th><th>WASTAGE (m / %)</th><th>VOLUME (m³)</th><th>STEEL (kg)</th><th>PHOTOS / ADMIN</th></tr></thead><tbody>
-      ${rows.length ? rows.map(c => `<tr><td><strong>${esc(singaporeDate(c.casting_start || c.prep_start))}</strong></td><td>Bed ${c.bed_no}</td><td><strong>${esc(c.project_code)}</strong><span class="muted-line">${esc(c.project_name)}</span></td><td>${esc(c.height_mm)} mm</td><td>${esc(c.strand_pattern)}</td><td>${duration(stageDuration(c, 'preparation'))}</td><td>${duration(stageDuration(c, 'casting'))}</td><td>${duration(stageDuration(c, 'curing'), 'hours')}</td><td>${esc(c.cube_strength_mpa ?? '—')}</td><td>${duration(stageDuration(c, 'cutting'))}</td><td>${esc(singaporeTime(c.cut_end))}</td>${materialCells(c)}<td><div class="archive-actions"><button type="button" class="small-action" data-action="view-album" data-cycle-id="${esc(c.id)}">${signedIn() ? `Photos (${cyclePhotos(c.id).length})` : 'Photos (login)'}</button>${state.admin ? `<button type="button" class="small-action edit-action" data-action="edit-history" data-cycle-id="${esc(c.id)}">Edit</button>` : ''}</div></td></tr>`).join('') : `<tr><td colspan="16" class="empty-row">${ico('history', 21)} No completed records match the selected filters.</td></tr>`}</tbody></table></div>
+      ${rows.length ? rows.map(c => `<tr><td><strong>${esc(singaporeDate(c.casting_start || c.prep_start))}</strong></td><td>Bed ${c.bed_no}</td><td><strong>${esc(c.project_code)}</strong><span class="muted-line">${esc(c.project_name)}</span></td><td>${esc(c.height_mm)} mm</td><td>${esc(c.strand_pattern)}</td><td>${duration(stageDuration(c, 'preparation'))}</td><td>${duration(stageDuration(c, 'casting'))}</td><td>${duration(stageDuration(c, 'curing'), 'hours')}</td><td>${esc(c.cube_strength_mpa ?? '—')}</td><td>${duration(stageDuration(c, 'cutting'))}</td><td>${esc(singaporeTime(c.cut_end))}</td>${materialCells(c)}<td><div class="archive-actions"><button type="button" class="small-action" data-action="view-album" data-cycle-id="${esc(c.id)}">${signedIn() ? `Photos (${cyclePhotos(c.id).length})` : 'Photos (login)'}</button>${state.admin ? `<button type="button" class="small-action edit-action" data-action="edit-history" data-cycle-id="${esc(c.id)}">Edit</button><button type="button" class="small-action delete-summary-action" data-action="delete-history" data-cycle-id="${esc(c.id)}">Delete</button>` : ''}</div></td></tr>`).join('') : `<tr><td colspan="16" class="empty-row">${ico('history', 21)} No completed records match the selected filters.</td></tr>`}</tbody></table></div>
       <div class="archive-footnote">${ico('shield', 15)} Displayed archive: last 30 days by completion time · All times use Singapore Time (UTC+8) · Source: ${state.mode === 'live' ? 'Supabase production database' : 'local demo storage'}</div>
    </section>`;
 }
@@ -320,6 +321,16 @@ function editHistoryModal() {
     ${photoEvidence(c, true)}
   </div></div>`;
 }
+function deleteHistoryModal() {
+  const c = state.cycles.find(x => x.id === state.modalCycle);
+  if (!c || !state.admin) return '';
+  return `<div class="modal-backdrop" data-action="close-modal-bg"><div class="modal-card" role="dialog" aria-modal="true" aria-label="Remove a production summary record">
+    <div class="modal-head"><div><div class="mini-eyebrow">ADMINISTRATOR ONLY · AUDITED</div><h2>Delete Summary Record?</h2><p>Bed ${c.bed_no} · ${esc(c.project_code)}</p></div><button class="icon-button" data-action="close-modal">${ico('x',20)}</button></div>
+    <p class="delete-explanation">This record will disappear from Daily Production Summary, but the original production information, photos and deletion audit will be retained in Supabase.</p>
+    <form id="delete-history-form" data-cycle-id="${esc(c.id)}"><label class="field-label" for="delete-reason">Reason for deletion *</label><textarea id="delete-reason" name="reason" minlength="5" maxlength="300" rows="3" required placeholder="Explain why this summary record should be removed"></textarea>
+    <button type="submit" class="btn danger" ${state.busy ? 'disabled' : ''}>Confirm Delete From Summary</button></form>
+  </div></div>`;
+}
 function albumModal() {
   const c = state.cycles.find(x => x.id === state.modalCycle);
   if (!c) return '';
@@ -333,6 +344,7 @@ function lightbox() {
 function modal() {
   if (!state.modal) return '';
   if (state.modal === 'edit') return editHistoryModal();
+  if (state.modal === 'delete') return deleteHistoryModal();
   if (state.modal === 'album') return albumModal();
   const project = state.modal === 'project';
   return `<div class="modal-backdrop" data-action="close-modal-bg"><div class="modal-card" role="dialog" aria-modal="true" aria-label="${project ? 'Add project' : 'Supervisor login'}">
@@ -344,13 +356,78 @@ function modal() {
       <button class="btn primary" type="submit" ${state.busy ? 'disabled' : ''}>${ico('log', 17)} Sign In</button><p class="field-note">Supervisor accounts are created by your Supabase administrator. Public self-registration is disabled.</p></form>`}
   </div></div>`;
 }
+function viewerGate() {
+  return `<section class="verification-layout" aria-label="Verification code login">
+    <div class="verification-card"><div class="verification-icon">${ico('shield',28)}</div><div class="mini-eyebrow">PCPL · HCS PRODUCTION</div><h1>Production Verification</h1>
+      <p>Enter the verification code to view all five HCS beds live and today's casting summary. Visitor access is strictly read-only.</p>
+      <form id="viewer-form"><label class="field-label" for="viewer-code">Verification Code</label><input id="viewer-code" type="password" name="code" required minlength="4" maxlength="128" autocomplete="off" placeholder="Enter verification code" />
+      <button type="submit" class="btn primary" ${state.busy ? 'disabled' : ''}>${ico('shield',16)} Verify & View Live Beds</button></form>
+      <button type="button" class="verification-staff-link" data-action="show-login">Admin / Supervisor email login</button>
+    </div>
+  </section>`;
+}
+function viewerToday() {
+  const beds = state.viewerData?.beds || [];
+  const rows = state.viewerData?.rows || [];
+  const castDate = state.viewerData?.date || today();
+  const checkedAt = state.viewerData?.checkedAt;
+  const fmt = (v, d=2) => v == null || !Number.isFinite(Number(v)) ? '—' : Number(v).toFixed(d);
+  const time = v => v ? `${esc(singaporeTime(v, false))} SGT` : '—';
+  const stageText = b => {
+    const stage = b.status === 'preparation' ? 'preparation' :
+      b.status === 'casting' ? 'casting' : b.status === 'curing' ? 'curing' :
+      b.status === 'cutting' ? 'cutting' : null;
+    if (stage) return `${esc(STATUSES[b.status]?.short || stage)} · ${duration(stageDuration(b, stage))}`;
+    if (b.status === 'ready_casting') return 'Preparation completed · ready for casting';
+    return b.status === 'available' ? 'Ready for next production cycle' : 'Production in progress';
+  };
+  return `<section class="viewer-dashboard">
+    <div class="viewer-dashboard-head"><div class="mini-eyebrow">VIEW ONLY · VERIFIED VISITOR</div><h1>HCS Live Production Monitor</h1>
+      <p>Bed 1–5 current status · Singapore time · Auto-refreshes every 15 seconds</p></div>
+    <div class="viewer-count"><strong>${beds.length}</strong><span>HCS beds monitored · Last checked ${checkedAt ? esc(singaporeTime(checkedAt, false)) + ' SGT' : '—'}</span>
+      <button type="button" class="outline-btn" data-action="refresh-viewer">${ico('refresh',16)} Refresh Now</button></div>
+    <section class="viewer-live-section" aria-label="Five live HCS beds">
+      <div class="viewer-section-heading"><h2>Bed Status Monitor</h2><span>READ ONLY · 5 BEDS</span></div>
+      <div class="viewer-bed-grid">${beds.map(b => {
+        const info = STATUSES[b.status] || STATUSES.available;
+        return `<article class="viewer-live-bed ${info.color}">
+          <div class="viewer-live-banner ${info.color}">BED ${esc(b.bed_no)} <span>${esc(info.label)}</span></div>
+          <div class="viewer-live-body"><h3>${b.project_name ? esc(b.project_name) : 'Bed Available'}</h3>
+            <p>${b.project_code ? 'Project ' + esc(b.project_code) : 'No active production cycle'}</p>
+            <div class="viewer-live-stage">${ico('clock',15)} <span>${stageText(b)}</span></div>
+            <dl>
+              <div><dt>Height</dt><dd>${b.height_mm == null ? '—' : esc(b.height_mm) + ' mm'}</dd></div>
+              <div><dt>Strand</dt><dd>${b.strand_pattern ? esc(b.strand_pattern) : '—'}</dd></div>
+              <div><dt>Cast Length</dt><dd>${b.casting_length_m == null ? '—' : fmt(b.casting_length_m,2) + ' m'}</dd></div>
+              <div><dt>Cube Strength</dt><dd>${b.cube_strength_mpa == null ? '—' : fmt(b.cube_strength_mpa,2) + ' MPa'}</dd></div>
+            </dl>
+          </div>
+        </article>`;
+      }).join('') || '<div class="viewer-empty">No bed data available. Try Refresh.</div>'}</div>
+    </section>
+    <section class="viewer-today-section" aria-label="Today casting summary">
+      <div class="viewer-section-heading"><h2>Today’s Casting Summary</h2><span>${esc(castDate)} · ${rows.length} batches</span></div>
+      <div class="viewer-tiles">${rows.map(c=>`<article class="viewer-tile"><div class="viewer-tile-head"><b>BED ${esc(c.bed_no)}</b><span>${esc(String(c.status||'').replaceAll('_',' ').toUpperCase())}</span></div><h3>${esc(c.project_name)}</h3><p>Project ${esc(c.project_code)}</p><dl>
+        <div><dt>Height</dt><dd>${esc(c.height_mm)} mm</dd></div><div><dt>Strand Pattern</dt><dd>${esc(c.strand_pattern)}</dd></div>
+        <div><dt>Casting Start</dt><dd>${time(c.casting_start)}</dd></div><div><dt>Casting Duration</dt><dd>${c.casting_start ? duration(elapsed(c.casting_start,c.casting_end||new Date())) : '—'}</dd></div>
+        <div><dt>Casting Length</dt><dd>${fmt(c.casting_length_m,2)} m</dd></div><div><dt>Wastage</dt><dd>${fmt(c.wastage_m,2)} m</dd></div>
+        <div><dt>Wastage Ratio</dt><dd>${c.wastage_ratio == null ? '—' : fmt(Number(c.wastage_ratio)*100,2)+'%'}</dd></div>
+        <div><dt>Concrete Volume</dt><dd>${fmt(c.concrete_volume_m3,3)} m³</dd></div>
+        <div><dt>Steel Weight</dt><dd>${fmt(c.steel_weight_kg,2)} kg</dd></div>
+      </dl></article>`).join('') || '<div class="viewer-empty">No batches have started Casting today.</div>'}</div>
+    </section>
+    <p class="viewer-disclaimer">Viewer access is read-only. Editing production, photos, formula settings and production history requires staff login.</p>
+  </section>`;
+}
 function render() {
   if (state.loadError) {
     app.innerHTML = `<div class="error-screen"><div class="error-panel">${ico('alert', 32)}<h1>Couldn't load production data</h1><p>${esc(state.loadError)}</p><p>Check your Supabase URL, publishable key and SQL setup in <code>README.md</code>.</p><button class="btn primary" data-action="retry">${ico('refresh', 17)} Retry connection</button></div></div>`;
     return;
   }
-  app.innerHTML = `<div class="app-shell">${header()}<main class="site-main">${nav()}${state.tab === 'overview' ? overview() : state.tab === 'archive' ? archive() : formulaPage()}
-    <footer class="app-footer"><div><b>ICPH</b> / Production Control Center <span class="footer-divider">·</span> HCS Module v1.5</div><span>Timezone: ${TIMEZONE} · ${state.mode === 'demo' ? 'Local demonstration' : 'Cloud-connected'}</span></footer>
+  const page = state.mode === 'live' && !signedIn() ? (viewerActive() ? viewerToday() : viewerGate()) :
+    `${nav()}${state.tab === 'overview' ? overview() : state.tab === 'archive' ? archive() : state.admin ? formulaPage() : overview()}`;
+  app.innerHTML = `<div class="app-shell">${header()}<main class="site-main">${page}
+    <footer class="app-footer"><div><b>ICPH</b> / Production Control Center <span class="footer-divider">·</span> HCS Module v1.7.2</div><span>Timezone: ${TIMEZONE} · ${state.mode === 'demo' ? 'Local demonstration' : 'Cloud-connected'}</span></footer>
     ${signedIn() ? `<button class="floating-add" data-action="show-project" title="Add Project">${ico('plus', 19)}<span>Add Project</span></button>` : ''}</main>${modal()}${lightbox()}${state.toast ? `<div class="toast ${state.toast.type}">${ico(state.toast.type === 'error' ? 'alert' : 'check', 18)}<span>${esc(state.toast.text)}</span><button data-action="dismiss-toast">${ico('x', 16)}</button></div>` : ''}</div>`;
 }
 function showToast(text, type = 'success') {
@@ -360,6 +437,14 @@ function showToast(text, type = 'success') {
 }
 async function refresh() {
   const version = ++state.loadVersion;
+  if (state.mode === 'live' && !signedIn()) {
+    if (viewerActive()) {
+      const viewer = await state.repo.verifyViewerCode(state.viewerCode);
+      if (version !== state.loadVersion) return;
+      state.viewerData = viewer;
+    }
+    render(); return;
+  }
   const data = await state.repo.getData();
   if (version !== state.loadVersion) return;
   state.beds = data.beds;
@@ -513,6 +598,7 @@ app.addEventListener('click', async event => {
     case 'close-photo-bg': if (event.target === target) { state.lightbox = null; render(); } break;
     case 'back-step': await backStep(); break;
     case 'view-album': state.modalCycle = target.dataset.cycleId; state.modal = 'album'; render(); break;
+    case 'delete-history': if (state.admin) { state.modalCycle=target.dataset.cycleId; state.modal='delete'; render(); } break;
     case 'edit-history': if (state.admin) { state.modalCycle = target.dataset.cycleId; state.modal = 'edit'; render(); } break;
     case 'select-bed': {
       state.selectedBed = Number(target.dataset.bed);
@@ -521,9 +607,11 @@ app.addEventListener('click', async event => {
     }
     case 'tab-overview': state.tab = 'overview'; render(); break;
     case 'tab-archive': state.tab = 'archive'; render(); break;
-    case 'tab-formula': state.tab = 'formula'; render(); break;
+    case 'tab-formula': if (state.admin) { state.tab = 'formula'; render(); } else showToast('Admin access required','error'); break;
     case 'delete-formula': if (state.admin && confirm(`Remove formula ${target.dataset.formulaKey}? Previously saved cycles will not change.`)) { try {await state.repo.saveFormula(target.dataset.formulaKind,target.dataset.formulaKey,null); await refresh(); showToast('Formula removed');}catch(e){showToast(e.message,'error');} } break;
     case 'show-login': state.modal = 'login'; render(); break;
+    case 'refresh-viewer': try { await refresh(); showToast('Today’s casting refreshed'); } catch(e) { showToast(e.message,'error'); } break;
+    case 'lock-viewer': state.viewerCode=''; state.viewerData=null; render(); break;
     case 'show-project': state.modal = 'project'; render(); break;
     case 'close-modal': state.modal = null; render(); break;
     case 'close-modal-bg': if (event.target === target) { state.modal = null; render(); } break;
@@ -533,7 +621,7 @@ app.addEventListener('click', async event => {
     case 'export-csv': exportCSV(); break;
     case 'refresh': try { await refresh(); showToast('Production data refreshed'); } catch (error) { showToast(error.message, 'error'); } break;
     case 'retry': state.loadError = null; render(); await bootstrap(); break;
-    case 'sign-out': try { await state.repo.signOut(); state.session = null; state.admin = false; state.photos = []; render(); showToast('Signed out'); } catch (error) { showToast(error.message, 'error'); } break;
+    case 'sign-out': try { await state.repo.signOut(); state.session = null; state.role='none'; state.admin = false; state.photos = []; state.cycles=[]; state.projects=[]; state.beds=[]; state.formulas=[]; state.viewerCode=''; state.viewerData=null; render(); showToast('Signed out'); } catch (error) { showToast(error.message, 'error'); } break;
     default: break;
   }
 });
@@ -570,6 +658,27 @@ app.addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.target;
   const values = new FormData(form);
+  if (form.id === 'viewer-form') {
+    const code = String(values.get('code') || '');
+    try {
+      state.busy=true;
+      const result=await state.repo.verifyViewerCode(code);
+      state.viewerData=result; state.viewerCode=code;
+      render();
+    } catch(error) { showToast(error.message || 'Verification failed', 'error'); }
+    finally { state.busy=false; render(); }
+    return;
+  }
+  if (form.id === 'delete-history-form') {
+    if (!state.admin) return showToast('Administrator permission required', 'error');
+    const cycleId=form.dataset.cycleId;
+    if (!confirm('Remove this completed batch from all production summaries? The audit record will be retained.')) return;
+    try { state.busy=true; await state.repo.deleteHistory(cycleId, String(values.get('reason')||''));
+      state.modal=null; state.modalCycle=null; await refresh(); showToast('Summary record removed; audit retained');
+    } catch(error) { showToast(error.message || 'Delete failed','error'); }
+    finally { state.busy=false; render(); }
+    return;
+  }
   if (form.id === 'project-form') return addProject(values.get('code'), values.get('name'));
   if (form.dataset.formulaKind) {
     if (!state.admin) return showToast('Administrator permission required','error');
@@ -609,10 +718,15 @@ app.addEventListener('submit', async event => {
       state.busy = true;
       const result = await state.repo.signIn(String(values.get('email')), String(values.get('password')));
       state.session = result.session || result;
-      state.admin = await state.repo.isAdmin();
+      state.role = await state.repo.getRole();
+      if (!['admin','supervisor'].includes(state.role)) {
+        await state.repo.signOut(); state.session=null; state.role='none';
+        throw new Error('Your account has not been assigned an ICPH staff role.');
+      }
+      state.admin = state.role === 'admin'; state.viewerCode=''; state.viewerData=null;
       state.modal = null;
       await refresh();
-      showToast('Supervisor login successful');
+      showToast(`${state.admin ? 'Administrator' : 'Supervisor'} login successful`);
     } catch (error) { showToast(error.message || 'Login failed', 'error'); }
     finally { state.busy = false; render(); }
   }
@@ -626,17 +740,37 @@ async function bootstrap() {
     state.mode = state.repo.mode;
     const authState = await state.repo.getSession();
     state.session = state.mode === 'live' ? authState.session : authState;
-    state.admin = signedIn() ? await state.repo.isAdmin() : false;
+    state.role = state.mode === 'demo' ? 'admin' : state.session?.user ? await state.repo.getRole() : 'none';
+    if (state.mode === 'live' && state.session?.user && state.role === 'none') {
+      await state.repo.signOut(); state.session = null;
+    }
+    state.admin = state.role === 'admin';
     unsubscribeAuth = state.repo.onAuthChange(session => {
+      if (state.mode !== 'live') return;
       state.session = session;
-      state.admin = false; render();
-      Promise.resolve().then(async () => { state.admin = signedIn() ? await state.repo.isAdmin() : false; await refresh(); }).catch(() => {});
+      if (!session) {
+        state.role='none'; state.admin=false;
+        state.beds=[]; state.projects=[]; state.cycles=[]; state.photos=[]; state.formulas=[];
+        render(); return;
+      }
+      Promise.resolve().then(async () => {
+        const role=await state.repo.getRole();
+        if (!['admin','supervisor'].includes(role)) { await state.repo.signOut(); return; }
+        state.role=role; state.admin=role==='admin'; state.viewerCode=''; state.viewerData=null;
+        await refresh();
+      }).catch(error => showToast(error.message, 'error'));
     });
     await refresh();
-    unsubscribe = state.repo.subscribe(() => refresh().catch(error => showToast(error.message, 'error')),
-      status => { state.online = status; const badge = document.querySelector('.live-indicator');
-        if (badge) { badge.className = `live-indicator ${status === 'SUBSCRIBED' ? 'connected' : 'offline'}`; badge.innerHTML = `<i></i>${status === 'SUBSCRIBED' ? 'LIVE SYNC' : 'SYNC ' + esc(status)}`; }
-      });
+    unsubscribe = state.repo.subscribe(() => {
+      if (signedIn()) refresh().catch(error => showToast(error.message,'error'));
+    }, status => {
+      state.online = status;
+      const badge = document.querySelector('.live-indicator');
+      if (badge && signedIn()) {
+        badge.className = `live-indicator ${status === 'SUBSCRIBED' ? 'connected' : 'offline'}`;
+        badge.innerHTML = `<i></i>${status === 'SUBSCRIBED' ? 'LIVE SYNC' : 'SYNC ' + esc(status)}`;
+      }
+    });
   } catch (error) { state.loadError = error.message || String(error); render(); }
 }
 setInterval(() => {
@@ -652,5 +786,12 @@ setInterval(() => {
     if (input && document.activeElement !== input) input.value = singaporeDateTimeInput();
   }
 }, 15000);
-setInterval(() => { if (state.repo && !document.querySelector('input:focus, select:focus, textarea:focus')) refresh().catch(() => {}); }, 30000);
+setInterval(() => {
+  if (state.repo && viewerActive() && !document.querySelector('input:focus, select:focus, textarea:focus'))
+    refresh().catch(error => showToast(error.message || 'Could not refresh live beds', 'error'));
+}, 15000);
+setInterval(() => {
+  if (state.repo && signedIn() && !document.querySelector('input:focus, select:focus, textarea:focus'))
+    refresh().catch(() => {});
+}, 30000);
 bootstrap();
