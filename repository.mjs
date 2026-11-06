@@ -1,4 +1,4 @@
-import { applyDemoAction, archiveCutoff, BED_COUNT, previousStep, validateArchivedEdit, validateFormula, formulaRate, computeMaterials } from './domain.mjs';
+import { applyDemoAction, archiveCutoff, BED_COUNT, previousStep, validateArchivedEdit, validateFormula, validateProjectDefaults, formulaRate, computeMaterials } from './domain.mjs?v=1.9';
 import { storeDemoPhoto, loadDemoPhoto } from './attachments.mjs';
 
 const STORE = 'icph-hcs-demo-v1';
@@ -7,9 +7,9 @@ const newId = () => globalThis.crypto?.randomUUID?.() || `local-${Date.now()}-${
 const seed = () => ({
   beds: Array.from({ length: BED_COUNT }, (_, i) => ({ bed_no: i + 1, status: 'available', active_cycle_id: null, updated_at: new Date().toISOString() })),
   projects: [
-    { id: 1, code: '10108', name: 'Bedok N8C14', is_active: true },
-    { id: 2, code: '10124', name: 'New Maitri School', is_active: true },
-    { id: 3, code: '10061', name: 'Project L', is_active: true }
+    { id: 1, code: '10108', name: 'Bedok N8C14', is_active: true, is_default: true },
+    { id: 2, code: '10124', name: 'New Maitri School', is_active: true, is_default: true },
+    { id: 3, code: '10061', name: 'Project L', is_active: true, is_default: true }
   ],
   cycles: [], events: [], photos: [], history_edits: [], formulas: []
 });
@@ -37,7 +37,7 @@ export function demoRepository() {
         }
         if (demoUrlCache.has(photo.id)) photos.push({ ...photo, url: demoUrlCache.get(photo.id) });
       }
-      return { beds: d.beds, projects: d.projects.filter(p => p.is_active), cycles, photos, formulas: d.formulas || [] };
+      return { beds: d.beds, projects: d.projects.filter(p => p.is_active).map(p => ({ ...p, is_default: p.is_default === true || [["10108","Bedok N8C14"],["10124","New Maitri School"],["10061","Project L"]].some(([code,name]) => p.code === code && p.name === name) })), cycles, photos, formulas: d.formulas || [] };
     },
     async getSession() { return { user: { email: 'Demo administrator' } }; },
     async isAdmin() { return true; },
@@ -47,6 +47,17 @@ export function demoRepository() {
     async signOut() {},
     onAuthChange() { return () => {}; },
     async applyAction(payload) { writeDemo(applyDemoAction(readDemo(), payload)); },
+    async setTotalBatchConcrete(cycleId, totalBatchConcreteM3) {
+      const d = readDemo();
+      const c = d.cycles.find(row => row.id === cycleId);
+      const bed = d.beds.find(row => row.active_cycle_id === cycleId);
+      if (!c || !bed || !['curing','cutting'].includes(bed.status)) throw new Error('Batch must be in Curing or Cutting.');
+      const value = Number(totalBatchConcreteM3);
+      if (!(value > 0 && value <= 10000)) throw new Error('Total Batch Concrete must be > 0 and <= 10,000 m³.');
+      c.total_batch_concrete_m3 = value;
+      d.events.push({cycle_id:c.id,bed_no:c.bed_no,action:'set_total_batch_concrete',event_at:new Date().toISOString()});
+      writeDemo(d);
+    },
     async backStep(bedNo) { writeDemo(previousStep(readDemo(), bedNo)); },
     async editHistory(cycleId, fields) {
       const d = readDemo();
@@ -98,9 +109,25 @@ export function demoRepository() {
       const d = readDemo();
       code = String(code).trim(); name = String(name).trim();
       if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,19}$/.test(code) || name.length < 2 || name.length > 100) throw new Error('Invalid project code or name.');
-      if (d.projects.some(p => p.code.toLowerCase() === code.toLowerCase())) throw new Error('This project code already exists.');
-      const project = { id: Math.max(0, ...d.projects.map(p => p.id)) + 1, code, name, is_active: true };
+      if (d.projects.some(p => p.code.toLowerCase() === code.toLowerCase())) throw new Error('This project code already exists. Use its registered project title.');
+      const project = { id: Math.max(0, ...d.projects.map(p => p.id)) + 1, code, name, is_active: true, is_default: false };
       d.projects.push(project); writeDemo(d); return project;
+    },
+    async addDefaultProject({ code, name, heightMm, strandPattern }) {
+      const d = readDemo();
+      code = String(code).trim(); name = String(name).trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,19}$/.test(code) || name.length < 2 || name.length > 100) throw new Error('Invalid project code or title.');
+      if (d.projects.some(row => row.code.toLowerCase() === code.toLowerCase())) throw new Error(`Project code ${code} already exists. Existing project codes and titles cannot be overwritten.`);
+      const preset = validateProjectDefaults(heightMm, strandPattern);
+      const project = { id: Math.max(0, ...d.projects.map(row => row.id)) + 1, code, name, is_active: true, is_default: true, ...preset };
+      d.projects.push(project); writeDemo(d); return project;
+    },
+    async updateProjectDefaults(projectId, heightMm, strandPattern) {
+      const d = readDemo();
+      const project = d.projects.find(row => Number(row.id) === Number(projectId));
+      if (!project || !project.is_default) throw new Error('Only default projects can receive saved height and strand presets.');
+      Object.assign(project, validateProjectDefaults(heightMm, strandPattern));
+      writeDemo(d); return project;
     },
     subscribe(callback) {
       const fn = (event) => { if (event.key === STORE) callback(); };
@@ -193,10 +220,17 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
       }));
     },
     async backStep(bedNo) { return unwrap(await client.rpc('hcs_back_step', { p_bed_no: bedNo })); },
+    async setTotalBatchConcrete(cycleId, totalBatchConcreteM3) {
+      return unwrap(await client.rpc('hcs_set_total_batch_concrete', {
+        p_cycle_id: cycleId, p_total_batch_concrete_m3: Number(totalBatchConcreteM3)
+      }));
+    },
     async editHistory(cycleId, f) {
-      return unwrap(await client.rpc('hcs_edit_history_v15', {
+      return unwrap(await client.rpc('hcs_edit_history_v19', {
         p_cycle_id: cycleId, p_project_id: Number(f.project_id), p_height_mm: Number(f.height_mm),
-        p_strand_pattern: f.strand_pattern, p_casting_length_m:f.casting_length_m === '' ? null : f.casting_length_m, p_prep_start: f.prep_start, p_prep_end: f.prep_end,
+        p_strand_pattern: f.strand_pattern, p_casting_length_m:f.casting_length_m === '' ? null : f.casting_length_m,
+        p_total_batch_concrete_m3:f.total_batch_concrete_m3 === '' || f.total_batch_concrete_m3 == null ? null : Number(f.total_batch_concrete_m3),
+        p_prep_start: f.prep_start, p_prep_end: f.prep_end,
         p_casting_start: f.casting_start, p_casting_end: f.casting_end, p_cut_start: f.cut_start,
         p_cut_end: f.cut_end, p_cube_strength_mpa: Number(f.cube_strength_mpa),
         p_cube_strength_updated_at: f.cube_strength_updated_at
@@ -226,6 +260,22 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
     async addProject({ code, name }) {
       return unwrap(await client.rpc('hcs_add_project', { p_code: code, p_name: name }));
     },
+    async addDefaultProject({ code, name, heightMm, strandPattern }) {
+      const preset = validateProjectDefaults(heightMm, strandPattern);
+      return unwrap(await client.rpc('hcs_add_default_project_v19', {
+        p_code: code, p_name: name,
+        p_default_height_mm: preset.default_height_mm,
+        p_default_strand_pattern: preset.default_strand_pattern
+      }));
+    },
+    async updateProjectDefaults(projectId, heightMm, strandPattern) {
+      const preset = validateProjectDefaults(heightMm, strandPattern);
+      return unwrap(await client.rpc('hcs_set_default_project_options', {
+        p_project_id: projectId,
+        p_default_height_mm: preset.default_height_mm,
+        p_default_strand_pattern: preset.default_strand_pattern
+      }));
+    },
     subscribe(callback, statusCallback) {
       let delay;
       const listener = () => { clearTimeout(delay); delay = setTimeout(callback, 180); };
@@ -240,3 +290,4 @@ export async function supabaseRepository({ supabaseUrl, supabaseAnonKey }) {
     }
   };
 }
+
