@@ -4,6 +4,20 @@
 @media(max-width:1250px){.workspace-grid{grid-template-columns:minmax(0,1fr) 313px;gap:17px}.site-main{padding-left:22px;padding-right:22px}.topbar-content{padding:0 22px}.bed-body{grid-template-columns:120px minmax(0,1fr);gap:10px}.stage-step{font-size:7px}.bed-id{width:120px}.bed-card-main{gap:11px}.bed-metrics>div{padding:7px}.bed-metrics span{font-size:8px}.bed-metrics strong{font-size:9px}}
 @media(max-width:1050px){.workspace-grid{grid-template-columns:1fr}.operator-panel{position:static;max-width:650px;width:100%;margin:auto}.production-column{min-width:0}.bed-body{grid-template-columns:165px minmax(0,1fr)}.bed-metrics span{font-size:10px}.bed-metrics strong{font-size:11px}.stats-grid{gap:10px}.date-display{display:none}.floating-add{right:17px;bottom:17px}}
 @media(max-width:680px){.topbar{height:auto;min-height:68px}.topbar-content{padding:12px 15px;gap:12px}.brand-name{font-size:15px}.brand-app{font-size:10px;letter-spacing:1px}.brand-subtitle{font-size:9px}.brand-mark{height:36px;width:36px}.topbar-actions{gap:6px}.topbar-time{display:none}.head-user{max-width:110px}.head-user span{font-size:10px}.head-login{font-size:10px;padding:8px}.head-login svg{display:none}.live-indicator{font-size:8px;padding:7px}.site-main{padding:0 13px 22px}.main-nav{padding-top:10px}.product-nav{width:100%}.view-nav{width:100%;height:42px}.view-tab{padding:0 9px;font-size:10px;gap:5px}.view-tab svg{width:15px}.product-pill{font-size:11px;margin-bottom:0;padding:10px}.hero{align-items:flex-start;margin:25px 0 20px;flex-direction:column}.hero h1{font-size:29px}.hero p{font-size:12px}.outline-btn{font-size:10px;padding:9px 12px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-bottom:25px}.kpi-card{padding:14px}.kpi-top{font-size:10px}.kpi-number{font-size:27px}.section-title-row h2{font-size:17px}.section-legend{display:none}.bed-card-main{flex-wrap:wrap;padding:13px 13px 10px 17px;gap:10px}.bed-id{width:100%;gap:8px}.bed-number{height:32px;width:32px;font-size:14px}.bed-id h3{font-size:11px}.bed-title{flex:1}.bed-project{font-size:12px}.bed-status{margin-left:0}.bed-body{padding:12px 13px 12px 17px;grid-template-columns:1fr;gap:15px}.slab-visual{width:100%;max-width:none;height:55px}.slab-cores i{max-width:40px}.bed-steps{padding:0 2px}.stage-step{font-size:8px}.bed-metrics{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:0}.bed-metrics>div{padding:9px}.bed-metrics span{font-size:9px}.bed-metrics strong{font-size:10px}.section-card-head{padding:17px 14px}.section-card h2{font-size:17px}.operator-content{padding:19px}.archive-metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.archive-metrics>div{padding:12px;min-width:0}.archive-metrics span{font-size:8px}.archive-metrics strong{font-size:17px}.archive-filters{padding:12px;gap:9px}.filter-group{width:calc(50% - 5px)}.search-filter{flex:1;width:100%;min-width:100%}.reset-filter{width:100%}.app-footer{flex-wrap:wrap;font-size:9px}.floating-add{padding:11px 13px}.floating-add span{display:none}}
+/* v1.8: Admin project master in Formula Settings */
+.formula-project-master{margin-top:22px;max-width:none}
+.project-master-form{display:flex;flex-wrap:wrap;gap:12px;align-items:end;padding:16px 22px}
+.project-master-form label{flex:1 1 210px;min-width:0}
+.project-master-form .btn{width:auto;min-width:195px}
+.project-master-list{padding:4px 22px 14px;display:grid;gap:8px}
+.project-master-row{display:grid;grid-template-columns:minmax(70px,110px) minmax(0,1fr) auto;align-items:center;gap:12px;border:1px solid #e1eaf4;background:#f9fbff;border-radius:9px;padding:10px 13px;font-size:12px}
+.project-master-row strong{color:#243e68;font-size:13px}
+.project-master-title{min-width:0;overflow-wrap:anywhere;color:#506783}
+.project-master-tag{border-radius:99px;font-weight:800;font-size:9px;letter-spacing:.4px;padding:6px 9px;white-space:nowrap}
+.project-master-tag.preset{background:#e7f5ed;color:#16844d}
+.project-master-tag.manual{background:#eef3fa;color:#58738d}
+.formula-project-master>.field-note{padding:0 22px 22px}
+@media(max-width:600px){.project-master-form{padding:15px}.project-master-form .btn{width:100%}.project-master-list{padding:0 15px 12px}.project-master-row{grid-template-columns:1fr auto;gap:5px}.project-master-title{grid-column:1/-1;grid-row:2}.project-master-tag{grid-column:2;grid-row:1}.formula-project-master>.field-note{padding:0 15px 15px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 
 
@@ -245,3 +259,22 @@
 @media(max-width:1480px){.viewer-bed-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:900px){.viewer-bed-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:600px){.viewer-bed-grid{grid-template-columns:1fr}.viewer-live-body h3{min-height:0}.viewer-live-stage{min-height:0}.viewer-count{margin:18px 0 22px}}
+
+/* v1.9: Project Master presets and actual concrete batch entry */
+.project-master-presets{grid-column:1/-1;display:grid;gap:8px;border-top:1px solid #e2eaf6;padding-top:10px;color:#637b99}
+.project-master-presets>small{font-size:11px;font-weight:600}
+.project-preset-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto;gap:10px;align-items:end}
+.project-preset-form label{font-weight:700;color:#55708d;font-size:10px;min-width:0}
+.project-preset-form input{display:block;width:100%;min-width:0;margin-top:5px;border:1px solid #d8e4f0;border-radius:7px;height:36px;padding:0 10px;font-size:12px;background:#fff}
+.project-preset-form button{height:36px;white-space:nowrap}
+.total-batch-entry{margin:14px 0 17px;padding:14px;border:1px solid #d9e8f5;background:#f4f9ff;border-radius:9px}
+.total-batch-entry .field-label{font-size:11px;margin-bottom:9px;color:#345780}
+.total-batch-entry .strength-group{align-items:stretch}
+.total-batch-entry input{flex:1;min-width:90px;width:auto;background:#fff}
+.total-batch-entry .btn{flex:0 1 auto;min-width:120px}
+.batch-preview{display:grid;gap:7px;margin-top:10px;color:#5c7390;font-size:11px;line-height:1.4}
+.batch-preview span{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.batch-preview strong{color:#203e66;text-align:right}
+.batch-preview .formula-warning{grid-column:1/-1;font-size:11px;color:#aa4f31}
+@media(max-width:700px){.project-preset-form{grid-template-columns:1fr 1fr}.project-preset-form button{grid-column:1/-1}.total-batch-entry .strength-group{flex-wrap:wrap}.total-batch-entry .btn{flex:1 1 140px}}
+@media(max-width:440px){.project-preset-form{grid-template-columns:1fr}.project-preset-form button{grid-column:1}.project-master-row{gap:8px}}
