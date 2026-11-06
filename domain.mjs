@@ -72,7 +72,14 @@ export function parseProjectText(text, projects) {
   const match = v.match(/^([a-zA-Z0-9][a-zA-Z0-9_-]{0,19})\s+[-–—]\s+(.{2,100})$/);
   if (!match) throw new Error('New project format: 10200 - Project Name, or pick an existing project.');
   const existingCode = projects.find(p => p.code.toLowerCase() === match[1].toLowerCase());
-  if (existingCode) return { project: existingCode };
+  if (existingCode) {
+    // An existing project code is canonical, especially for admin-owned defaults.
+    // Never silently use a different title or let manual entry replace the preset.
+    if (existingCode.name.trim().toLowerCase() !== match[2].trim().toLowerCase()) {
+      throw new Error(`Project ${existingCode.code} is already registered as "${existingCode.name}". Select the official project from the dropdown; its title cannot be overwritten.`);
+    }
+    return { project: existingCode };
+  }
   return { newProject: { code: match[1], name: match[2].trim() } };
 }
 // Snapshot the material-rate settings for each production cycle.
@@ -82,27 +89,50 @@ export function formulaRate(rates, kind, key) {
   const row = (rates || []).find(r => r.kind === kind && String(r.key).trim().toUpperCase() === k);
   return row && Number(row.rate) > 0 ? Number(row.rate) : null;
 }
-export function computeMaterials({ castingLengthM, bedLengthM, volumePerM, steelPerM }) {
+export function computeMaterials({ castingLengthM, bedLengthM, volumePerM, steelPerM, totalBatchConcreteM3 = null }) {
   const length = Number(castingLengthM);
   const bed = bedLengthM == null ? null : Number(bedLengthM);
   const volume = volumePerM == null ? null : Number(volumePerM);
   const steel = steelPerM == null ? null : Number(steelPerM);
   if (!Number.isFinite(length) || length <= 0 || length > 500) throw new Error('Casting Length must be between 0 and 500 m.');
   if (bed != null && (!Number.isFinite(bed) || bed <= 0 || length > bed + 1e-9)) throw new Error('Casting Length cannot exceed the configured Bed Length.');
+  const totalBatch = totalBatchConcreteM3 === '' || totalBatchConcreteM3 == null ? null : Number(totalBatchConcreteM3);
+  if (totalBatch != null && (!Number.isFinite(totalBatch) || totalBatch <= 0 || totalBatch > 10000)) {
+    throw new Error('Total Batch Concrete must be greater than 0 and no more than 10,000 m³.');
+  }
+  const unusedLength = bed == null ? null : Math.max(0, bed - length);
+  const castVolume = volume == null ? null : length * volume;
+  const concreteDifference = totalBatch != null && castVolume != null ? totalBatch - castVolume : null;
+  const steelWaste = unusedLength != null && steel != null ? unusedLength * steel : null;
   return {
     casting_length_m: length,
     bed_length_m: bed,
     concrete_m3_per_m: volume,
     steel_kg_per_m: steel,
-    wastage_m: bed == null ? null : Math.max(0, bed - length),
-    wastage_ratio: bed == null ? null : Math.max(0, (bed-length)/bed),
-    concrete_volume_m3: volume == null ? null : length * volume,
-    steel_weight_kg: steel == null ? null : length * steel
+    total_batch_concrete_m3: totalBatch,
+    wastage_m: unusedLength,               // Retained for old saved consumers.
+    wastage_ratio: bed == null ? null : unusedLength / bed,
+    steel_wastage_m: unusedLength,
+    steel_wastage_kg: steelWaste,
+    steel_wastage_ratio: bed == null ? null : unusedLength / bed,
+    concrete_volume_m3: castVolume,
+    steel_weight_kg: steel == null ? null : length * steel,
+    concrete_wastage_m3: concreteDifference,
+    concrete_wastage_ratio: concreteDifference == null ? null : concreteDifference / totalBatch
   };
 }
 export function cycleMaterials(c) {
   if (!c || c.casting_length_m == null) return null;
-  return computeMaterials({ castingLengthM:c.casting_length_m, bedLengthM:c.bed_length_m, volumePerM:c.concrete_m3_per_m, steelPerM:c.steel_kg_per_m });
+  return computeMaterials({ castingLengthM:c.casting_length_m, bedLengthM:c.bed_length_m,
+    volumePerM:c.concrete_m3_per_m, steelPerM:c.steel_kg_per_m,
+    totalBatchConcreteM3:c.total_batch_concrete_m3 });
+}
+export function validateProjectDefaults(heightMm, strandPattern) {
+  const height = Number(heightMm);
+  const pattern = String(strandPattern || '').trim();
+  if (!Number.isFinite(height) || height <= 0 || height > 1000) throw new Error('Default Height must be between 0 and 1000 mm.');
+  if (pattern.length < 1 || pattern.length > 150) throw new Error('Default Strand Pattern is required (max 150 characters).');
+  return { default_height_mm: height, default_strand_pattern: pattern };
 }
 export function validateFormula(kind, key, rate) {
   const k = String(key ?? '').trim();
@@ -145,7 +175,7 @@ export function validateArchivedEdit(original, fields) {
   const c = { ...original, ...fields };
   if (!(Number(c.height_mm) > 0 && Number(c.height_mm) <= 1000)) throw new Error('Invalid height.');
   if (!String(c.strand_pattern || '').trim()) throw new Error('Strand pattern is required.');
-  if (c.casting_length_m != null) computeMaterials({castingLengthM:c.casting_length_m,bedLengthM:c.bed_length_m,volumePerM:c.concrete_m3_per_m,steelPerM:c.steel_kg_per_m});
+  if (c.casting_length_m != null) computeMaterials({castingLengthM:c.casting_length_m,bedLengthM:c.bed_length_m,volumePerM:c.concrete_m3_per_m,steelPerM:c.steel_kg_per_m,totalBatchConcreteM3:c.total_batch_concrete_m3});
   const names = ['prep_start', 'prep_end', 'casting_start', 'casting_end', 'cut_start', 'cut_end'];
   const values = names.map(k => +new Date(c[k]));
   if (values.some(v => !Number.isFinite(v)) || values.some((v,i) => i && v < values[i-1])) throw new Error('Production timestamps must follow the process order.');
@@ -160,7 +190,7 @@ const checkTime = (when, previous) => {
   if (!Number.isFinite(time) || time > Date.now() + 60000) throw new Error('Event time must be valid and not in the future.');
   if (previous && time < +new Date(previous)) throw new Error('Event time must not be earlier than the preceding stage.');
 };
-export function applyDemoAction(data, { bedNo, action, at, projectId, heightMm, strandPattern, castingLengthM, cubeStrengthMpa }) {
+export function applyDemoAction(data, { bedNo, action, at, projectId, heightMm, strandPattern, castingLengthM, cubeStrengthMpa, totalBatchConcreteM3 }) {
   const next = structuredClone(data);
   const bed = next.beds.find(x => x.bed_no === Number(bedNo));
   if (!bed) throw new Error('Bed not found.');
@@ -180,7 +210,7 @@ export function applyDemoAction(data, { bedNo, action, at, projectId, heightMm, 
       casting_length_m: materials.casting_length_m, bed_length_m: materials.bed_length_m, concrete_m3_per_m: materials.concrete_m3_per_m, steel_kg_per_m: materials.steel_kg_per_m,
       prep_start: at, prep_end: null, casting_start: null, casting_end: null,
       curing_start: null, cut_start: null, cut_end: null, cube_strength_mpa: null,
-      cube_strength_updated_at: null, created_at: at
+      cube_strength_updated_at: null, total_batch_concrete_m3: null, created_at: at
     };
     next.cycles.unshift(record);
     bed.active_cycle_id = record.id;
@@ -198,6 +228,11 @@ export function applyDemoAction(data, { bedNo, action, at, projectId, heightMm, 
         if (bed.status !== 'casting') throw new Error('Bed is not in Casting.');
         checkTime(at, cycle.casting_start); cycle.casting_end = at;
         cycle.curing_start = at; bed.status = 'curing'; break;
+      case 'set_total_batch_concrete':
+        if (!['curing','cutting'].includes(bed.status)) throw new Error('Total Batch Concrete can be recorded during Curing or Cutting.');
+        checkTime(at, cycle.curing_start);
+        if (!(Number(totalBatchConcreteM3) > 0 && Number(totalBatchConcreteM3) <= 10000)) throw new Error('Total Batch Concrete must be > 0 and <= 10,000 m³.');
+        cycle.total_batch_concrete_m3 = Number(totalBatchConcreteM3); break;
       case 'set_cube_strength':
         if (bed.status !== 'curing') throw new Error('Cube strength is updated during Curing.');
         checkTime(at, cycle.cube_strength_updated_at || cycle.curing_start);
