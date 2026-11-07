@@ -237,28 +237,12 @@ function operatorPanel() {
     ${c ? `<div class="active-context"><div class="active-context-head">${ico('box', 16)} CURRENT PRODUCTION</div><strong>${esc(c.project_code)} — ${esc(c.project_name)}</strong><div>${esc(c.height_mm)} mm height · ${esc(c.strand_pattern)} · ${num(c.casting_length_m,2)} m casting length</div><div class="context-start">Started ${esc(singaporeTime(c.prep_start))} SGT</div>${materialsMini(c)}</div>` : ''}
     ${locked ? `<div class="login-gate">${ico('shield', 22)}<h3>View-only access</h3><p>All staff can view live bed statuses. A supervisor account is required to update production.</p><button class="btn primary" data-action="show-login">${ico('log', 16)} Supervisor login</button></div>` : `
       ${b.status === 'available' ? `<div class="editor-fields">
-        <label class="field-label" for="project-preset-select">Project — Saved List <span class="required">*</span></label>
-        <select id="project-preset-select" class="saved-preset-select" data-preset="project" aria-label="Select existing project">
-          <option value="">Select saved Project (${state.projects.length}) or enter manually below</option>
-          ${state.projects.map(p => `<option value="${esc(p.code)} - ${esc(p.name)}" ${state.projectText.trim().toLowerCase() === `${p.code} - ${p.name}`.toLowerCase() ? 'selected' : ''}>${esc(p.code)} — ${esc(p.name)}${p.is_default ? ' · DEFAULT' : ' · MANUAL'}</option>`).join('')}
-        </select>
-        ${!state.projects.length ? '<p class="formula-warning">No saved projects received. Ask administrator to check the Supervisor read permission for hcs_projects.</p>' : ''}
-        <label class="field-label preset-manual-label" for="project-field">Or Enter Project Code — Title</label>
-        <input id="project-field" list="project-options" data-field="projectText" placeholder="e.g. 10200 - New Project" value="${esc(state.projectText)}" autocomplete="off" />
+        <label class="field-label" for="project-field">Project <span class="required">*</span></label>
+        <input id="project-field" list="project-options" data-field="projectText" placeholder="Select or enter code - name" value="${esc(state.projectText)}" autocomplete="off" />
         <datalist id="project-options">${state.projects.map(p => `<option value="${esc(p.code)} - ${esc(p.name)}"></option>`).join('')}</datalist>
-        <div class="field-note">Saved Projects are available to both Admin and Supervisor. New codes can be entered manually, but an existing code cannot be overwritten with a different title.</div>
-        <div class="two-fields">
-          <div><label class="field-label" for="height-preset-select">Saved Height (mm)</label>
-            <select id="height-preset-select" class="saved-preset-select" data-preset="height" aria-label="Select saved height"><option value="">Select saved Height</option>${selectionOptions('volume')}</select>
-            <label class="field-label preset-manual-label" for="height-field">Height (mm) <span class="required">*</span></label>
-            <input id="height-field" data-field="height" type="number" list="height-default-options" min="1" max="1000" step="0.1" inputmode="decimal" placeholder="Or enter Height" value="${esc(state.height)}" /><datalist id="height-default-options">${selectionOptions('volume')}</datalist>
-          </div>
-          <div><label class="field-label" for="strand-preset-select">Saved Strand Pattern</label>
-            <select id="strand-preset-select" class="saved-preset-select" data-preset="strand" aria-label="Select saved strand pattern"><option value="">Select saved Strand</option>${selectionOptions('steel')}</select>
-            <label class="field-label preset-manual-label" for="strand-field">Strand Pattern <span class="required">*</span></label>
-            <input id="strand-field" data-field="strandPattern" type="text" list="strand-default-options" maxlength="150" placeholder="Or enter Strand Pattern" value="${esc(state.strandPattern)}" /><datalist id="strand-default-options">${selectionOptions('steel')}</datalist>
-          </div>
-        </div>
+        <div class="field-note">Choose an official project or enter <b>10200 - New Project</b> to save a new code. Existing project codes cannot be assigned a different title.</div>
+        <div class="two-fields"><div><label class="field-label" for="height-field">Height (mm) <span class="required">*</span></label><input id="height-field" data-field="height" type="number" list="height-default-options" min="1" max="1000" step="0.1" placeholder="Select or key in height" value="${esc(state.height)}" /><datalist id="height-default-options">${selectionOptions('volume')}</datalist></div>
+        <div><label class="field-label" for="strand-field">Strand Pattern <span class="required">*</span></label><input id="strand-field" data-field="strandPattern" type="text" list="strand-default-options" maxlength="150" placeholder="Select or key in strand" value="${esc(state.strandPattern)}" /><datalist id="strand-default-options">${selectionOptions('steel')}</datalist></div></div>
         <p class="field-note">Selecting a saved Default Project can fill Height and Strand Pattern automatically. You can also choose saved options or key in your own values.</p>
         <label class="field-label" for="casting-length-field" style="margin-top:15px">Casting Length (m) <span class="required">*</span></label>
         <input id="casting-length-field" data-field="castingLength" type="number" min="0.001" max="500" step="0.001" inputmode="decimal" placeholder="e.g. 115.50" value="${esc(state.castingLength)}" />
@@ -781,15 +765,9 @@ app.addEventListener('input', event => {
   if (el.dataset.field === 'eventTime') state.manualTime = true;
   if (el.dataset.field !== 'selectedBed') state[el.dataset.field] = el.value;
   if (['height','strandPattern','castingLength'].includes(el.dataset.field)) {
-    const picker = document.getElementById(el.dataset.field === 'height' ? 'height-preset-select' : el.dataset.field === 'strandPattern' ? 'strand-preset-select' : '');
-    if (picker) picker.value = el.value;
     const preview=document.getElementById('material-preview'); if (preview) preview.innerHTML=materialsPreview();
   }
-  if (el.dataset.field === 'projectText') {
-    const savedSelect = document.getElementById('project-preset-select');
-    if (savedSelect) savedSelect.value = state.projectText;
-    applySelectedProjectPreset();
-  }
+  if (el.dataset.field === 'projectText') applySelectedProjectPreset();
   if (el.dataset.field === 'totalBatchConcrete') {
     const target=document.getElementById('batch-waste-preview');
     if (target) target.innerHTML=storedBatchPreview(cycleForBed(bedByNumber(state.selectedBed)),state.totalBatchConcrete);
@@ -798,33 +776,6 @@ app.addEventListener('input', event => {
 app.addEventListener('change', event => {
   const el = event.target;
   if (el.matches('input[data-photo-stage]')) { void uploadPhotoInput(el); return; }
-  // Native datalist is not a reliable visible dropdown, especially on phones.
-  // These select controls are available to Admin AND Supervisor; typed input remains possible.
-  if (el.dataset.preset) {
-    const value = String(el.value || '');
-    if (!value) return;
-    if (el.dataset.preset === 'project') {
-      state.projectText = value;
-      const input = document.getElementById('project-field');
-      if (input) input.value = value;
-      applySelectedProjectPreset();
-      const heightSelect = document.getElementById('height-preset-select');
-      if (heightSelect) heightSelect.value = String(state.height || '');
-      const strandSelect = document.getElementById('strand-preset-select');
-      if (strandSelect) strandSelect.value = String(state.strandPattern || '');
-    } else if (el.dataset.preset === 'height') {
-      state.height = value;
-      const input = document.getElementById('height-field');
-      if (input) input.value = value;
-    } else if (el.dataset.preset === 'strand') {
-      state.strandPattern = value;
-      const input = document.getElementById('strand-field');
-      if (input) input.value = value;
-    }
-    const preview = document.getElementById('material-preview');
-    if (preview) preview.innerHTML = materialsPreview();
-    return;
-  }
   if (!el.dataset.field) return;
   if (el.dataset.field === 'projectText') {
     state.projectText=el.value; applySelectedProjectPreset();
