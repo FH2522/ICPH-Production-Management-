@@ -285,32 +285,3 @@
 .project-title-edit:hover{background:#dfecff}
 #title-project-code[readonly]{background:#f2f5fa;color:#526a86;cursor:not-allowed}
 @media(max-width:680px){.project-master-row{grid-template-columns:minmax(0,1fr) auto}.project-master-row>strong{grid-column:1;grid-row:1}.project-master-row>.project-master-tag{grid-column:2;grid-row:1}.project-master-row>.project-master-title{grid-column:1/-1;grid-row:2}.project-master-row>.project-title-edit{grid-column:1/-1;grid-row:3;justify-self:start}}
-
-
-/* v1.9.2: explicit saved dropdowns for BOTH Administrator and Supervisor. */
-.editor-fields .saved-preset-select {
-  display:block;
-  box-sizing:border-box;
-  width:100%;
-  min-width:0;
-  height:44px;
-  margin:6px 0 10px;
-  padding:0 30px 0 12px;
-  border:1px solid #b9cbe4;
-  border-radius:8px;
-  background-color:#f2f7ff;
-  color:#17385c;
-  font-size:12px;
-  font-weight:650;
-  cursor:pointer;
-}
-.editor-fields .saved-preset-select:focus {
-  outline:2px solid #78a8f3;
-  outline-offset:1px;
-}
-.editor-fields .preset-manual-label { margin-top:10px; }
-.editor-fields .two-fields .saved-preset-select { font-size:11px; padding-left:8px; }
-@media (max-width:500px) {
-  .editor-fields .two-fields { grid-template-columns:1fr; }
-  .editor-fields .saved-preset-select { min-height:46px; font-size:13px; }
-}
