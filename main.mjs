@@ -3,7 +3,7 @@ import {
   singaporeDateTimeInput, fromSingaporeInput, elapsed, duration, stageDuration,
   parseProjectText, validateArchivedEdit, validateProjectDefaults, PHOTO_STAGES, PREVIOUS_STEPS, formulaRate, computeMaterials, cycleMaterials, escapeHtml as esc
 } from './domain.mjs?v=1.9';
-import { demoRepository, supabaseRepository } from './repository.mjs?v=1.9';
+import { demoRepository, supabaseRepository } from './repository.mjs?v=1.9.1';
 
 const app = document.getElementById('app');
 const conf = window.ICPH_CONFIG || {};
@@ -15,7 +15,7 @@ const state = {
   modal: null, toast: null, projectText: '', height: '', strandPattern: '', castingLength: '', strength: '', totalBatchConcrete: '',
   eventTime: singaporeDateTimeInput(), manualTime: false,
   archiveDate: '', archiveSort: 'desc', archiveSearch: '', loadError: null,
-  loadVersion: 0, modalCycle: null, lightbox: null
+  loadVersion: 0, modalCycle: null, modalProjectId: null, lightbox: null
 };
 let unsubscribe = null;
 let unsubscribeAuth = null;
@@ -237,12 +237,28 @@ function operatorPanel() {
     ${c ? `<div class="active-context"><div class="active-context-head">${ico('box', 16)} CURRENT PRODUCTION</div><strong>${esc(c.project_code)} — ${esc(c.project_name)}</strong><div>${esc(c.height_mm)} mm height · ${esc(c.strand_pattern)} · ${num(c.casting_length_m,2)} m casting length</div><div class="context-start">Started ${esc(singaporeTime(c.prep_start))} SGT</div>${materialsMini(c)}</div>` : ''}
     ${locked ? `<div class="login-gate">${ico('shield', 22)}<h3>View-only access</h3><p>All staff can view live bed statuses. A supervisor account is required to update production.</p><button class="btn primary" data-action="show-login">${ico('log', 16)} Supervisor login</button></div>` : `
       ${b.status === 'available' ? `<div class="editor-fields">
-        <label class="field-label" for="project-field">Project <span class="required">*</span></label>
-        <input id="project-field" list="project-options" data-field="projectText" placeholder="Select or enter code - name" value="${esc(state.projectText)}" autocomplete="off" />
+        <label class="field-label" for="project-preset-select">Project — Saved List <span class="required">*</span></label>
+        <select id="project-preset-select" class="saved-preset-select" data-preset="project" aria-label="Select existing project">
+          <option value="">Select saved Project (${state.projects.length}) or enter manually below</option>
+          ${state.projects.map(p => `<option value="${esc(p.code)} - ${esc(p.name)}" ${state.projectText.trim().toLowerCase() === `${p.code} - ${p.name}`.toLowerCase() ? 'selected' : ''}>${esc(p.code)} — ${esc(p.name)}${p.is_default ? ' · DEFAULT' : ' · MANUAL'}</option>`).join('')}
+        </select>
+        ${!state.projects.length ? '<p class="formula-warning">No saved projects received. Ask administrator to check the Supervisor read permission for hcs_projects.</p>' : ''}
+        <label class="field-label preset-manual-label" for="project-field">Or Enter Project Code — Title</label>
+        <input id="project-field" list="project-options" data-field="projectText" placeholder="e.g. 10200 - New Project" value="${esc(state.projectText)}" autocomplete="off" />
         <datalist id="project-options">${state.projects.map(p => `<option value="${esc(p.code)} - ${esc(p.name)}"></option>`).join('')}</datalist>
-        <div class="field-note">Choose an official project or enter <b>10200 - New Project</b> to save a new code. Existing project codes cannot be assigned a different title.</div>
-        <div class="two-fields"><div><label class="field-label" for="height-field">Height (mm) <span class="required">*</span></label><input id="height-field" data-field="height" type="number" list="height-default-options" min="1" max="1000" step="0.1" placeholder="Select or key in height" value="${esc(state.height)}" /><datalist id="height-default-options">${selectionOptions('volume')}</datalist></div>
-        <div><label class="field-label" for="strand-field">Strand Pattern <span class="required">*</span></label><input id="strand-field" data-field="strandPattern" type="text" list="strand-default-options" maxlength="150" placeholder="Select or key in strand" value="${esc(state.strandPattern)}" /><datalist id="strand-default-options">${selectionOptions('steel')}</datalist></div></div>
+        <div class="field-note">Saved Projects are available to both Admin and Supervisor. New codes can be entered manually, but an existing code cannot be overwritten with a different title.</div>
+        <div class="two-fields">
+          <div><label class="field-label" for="height-preset-select">Saved Height (mm)</label>
+            <select id="height-preset-select" class="saved-preset-select" data-preset="height" aria-label="Select saved height"><option value="">Select saved Height</option>${selectionOptions('volume')}</select>
+            <label class="field-label preset-manual-label" for="height-field">Height (mm) <span class="required">*</span></label>
+            <input id="height-field" data-field="height" type="number" list="height-default-options" min="1" max="1000" step="0.1" inputmode="decimal" placeholder="Or enter Height" value="${esc(state.height)}" /><datalist id="height-default-options">${selectionOptions('volume')}</datalist>
+          </div>
+          <div><label class="field-label" for="strand-preset-select">Saved Strand Pattern</label>
+            <select id="strand-preset-select" class="saved-preset-select" data-preset="strand" aria-label="Select saved strand pattern"><option value="">Select saved Strand</option>${selectionOptions('steel')}</select>
+            <label class="field-label preset-manual-label" for="strand-field">Strand Pattern <span class="required">*</span></label>
+            <input id="strand-field" data-field="strandPattern" type="text" list="strand-default-options" maxlength="150" placeholder="Or enter Strand Pattern" value="${esc(state.strandPattern)}" /><datalist id="strand-default-options">${selectionOptions('steel')}</datalist>
+          </div>
+        </div>
         <p class="field-note">Selecting a saved Default Project can fill Height and Strand Pattern automatically. You can also choose saved options or key in your own values.</p>
         <label class="field-label" for="casting-length-field" style="margin-top:15px">Casting Length (m) <span class="required">*</span></label>
         <input id="casting-length-field" data-field="castingLength" type="number" min="0.001" max="500" step="0.001" inputmode="decimal" placeholder="e.g. 115.50" value="${esc(state.castingLength)}" />
@@ -361,6 +377,7 @@ function formulaPage() {
         ${[...state.projects].sort((a,b)=>a.code.localeCompare(b.code)).map(project => `<div class="project-master-row">
           <strong>${esc(project.code)}</strong><span class="project-master-title">${esc(project.name)}</span>
           <span class="project-master-tag ${project.is_default?'preset':'manual'}">${project.is_default?'DEFAULT · PROTECTED':'MANUAL'}</span>
+          ${canEdit ? `<button type="button" class="small-action project-title-edit" data-action="edit-project-title" data-project-id="${esc(project.id)}">Edit Title</button>` : ''}
           ${project.is_default ? `<div class="project-master-presets"><small>Height: ${project.default_height_mm == null ? 'Not set' : esc(project.default_height_mm)+' mm'} · Strand: ${project.default_strand_pattern ? esc(project.default_strand_pattern) : 'Not set'}</small>
             ${canEdit ? `<form class="project-preset-form" data-project-id="${esc(project.id)}">
               <label>Height (mm)<input type="number" name="height_mm" min="0.1" max="1000" step="0.1" value="${esc(project.default_height_mm ?? '')}" required /></label>
@@ -368,9 +385,25 @@ function formulaPage() {
               <button class="small-action" type="submit">Save Presets</button></form>`:''}</div>`:''}
         </div>`).join('') || '<div class="formula-empty">No projects have been created.</div>'}
       </div>
-      <p class="field-note">The same code cannot be created twice, even with a different letter case. Existing titles are never overwritten.</p>
+      <p class="field-note">Project codes are unique and permanent. Admin may correct a saved title using Edit Title; previous production history is not rewritten.</p>
     </section>
     <section class="formula-explanation"><h3>Calculation Method</h3><div class="explanation-grid"><div><b>Steel Wastage (m)</b><span>Default Bed Length − Casting Length</span></div><div><b>Steel Wastage (kg)</b><span>Steel Wastage Length × kg/m</span></div><div><b>Concrete Casting Volume (m³)</b><span>Casting Length × m³/m</span></div><div><b>Concrete Wastage (%)</b><span>(Total Batch Concrete − Casting Volume) ÷ Total Batch Concrete × 100%</span></div></div><p>Steel Wastage is estimated from the unused bed length and strand rate. Concrete Wastage uses the actual total batch entered under Cube Strength. Missing data displays —. Negative concrete waste indicates the reported batch is smaller than calculated casting volume and needs checking.</p></section>`;
+}
+function editProjectTitleModal() {
+  if (!state.admin) return '';
+  const project = state.projects.find(p => Number(p.id) === Number(state.modalProjectId));
+  if (!project) return '';
+  return `<div class="modal-backdrop" data-action="close-modal-bg"><div class="modal-card" role="dialog" aria-modal="true" aria-label="Edit project title">
+    <div class="modal-head"><div><div class="mini-eyebrow">ADMINISTRATOR ONLY · AUDITED</div><h2>Edit Project Title</h2><p>Correct an existing ${project.is_default ? 'Default' : 'Manual'} Project.</p></div><button type="button" class="icon-button" data-action="close-modal" aria-label="Close">${ico('x', 21)}</button></div>
+    <form id="project-title-edit-form" data-project-id="${esc(project.id)}">
+      <label class="field-label" for="title-project-code">Project Code (locked)</label>
+      <input id="title-project-code" value="${esc(project.code)}" readonly aria-readonly="true" />
+      <label class="field-label" for="title-project-name">Project Title *</label>
+      <input id="title-project-name" name="new_name" value="${esc(project.name)}" minlength="2" maxlength="100" required autocomplete="off" />
+      <p class="field-note">This correction updates the Project dropdown for future batches. Previous production records keep their historical Project Title. The old and new titles are recorded in an admin audit log.</p>
+      <button type="submit" class="btn primary" ${state.busy ? 'disabled' : ''}>Save Corrected Title</button>
+    </form>
+  </div></div>`;
 }
 function editHistoryModal() {
   const c = state.cycles.find(x => x.id === state.modalCycle);
@@ -418,6 +451,7 @@ function lightbox() {
 }
 function modal() {
   if (!state.modal) return '';
+  if (state.modal === 'edit-project-title') return editProjectTitleModal();
   if (state.modal === 'edit') return editHistoryModal();
   if (state.modal === 'delete') return deleteHistoryModal();
   if (state.modal === 'album') return albumModal();
@@ -695,6 +729,7 @@ app.addEventListener('click', async event => {
     case 'back-step': await backStep(); break;
     case 'view-album': state.modalCycle = target.dataset.cycleId; state.modal = 'album'; render(); break;
     case 'delete-history': if (state.admin) { state.modalCycle=target.dataset.cycleId; state.modal='delete'; render(); } break;
+    case 'edit-project-title': if (state.admin) { state.modalProjectId = Number(target.dataset.projectId); state.modal = 'edit-project-title'; render(); } break;
     case 'edit-history': if (state.admin) { state.modalCycle = target.dataset.cycleId; state.modal = 'edit'; render(); } break;
     case 'select-bed': {
       state.selectedBed = Number(target.dataset.bed);
@@ -746,9 +781,15 @@ app.addEventListener('input', event => {
   if (el.dataset.field === 'eventTime') state.manualTime = true;
   if (el.dataset.field !== 'selectedBed') state[el.dataset.field] = el.value;
   if (['height','strandPattern','castingLength'].includes(el.dataset.field)) {
+    const picker = document.getElementById(el.dataset.field === 'height' ? 'height-preset-select' : el.dataset.field === 'strandPattern' ? 'strand-preset-select' : '');
+    if (picker) picker.value = el.value;
     const preview=document.getElementById('material-preview'); if (preview) preview.innerHTML=materialsPreview();
   }
-  if (el.dataset.field === 'projectText') applySelectedProjectPreset();
+  if (el.dataset.field === 'projectText') {
+    const savedSelect = document.getElementById('project-preset-select');
+    if (savedSelect) savedSelect.value = state.projectText;
+    applySelectedProjectPreset();
+  }
   if (el.dataset.field === 'totalBatchConcrete') {
     const target=document.getElementById('batch-waste-preview');
     if (target) target.innerHTML=storedBatchPreview(cycleForBed(bedByNumber(state.selectedBed)),state.totalBatchConcrete);
@@ -757,6 +798,33 @@ app.addEventListener('input', event => {
 app.addEventListener('change', event => {
   const el = event.target;
   if (el.matches('input[data-photo-stage]')) { void uploadPhotoInput(el); return; }
+  // Native datalist is not a reliable visible dropdown, especially on phones.
+  // These select controls are available to Admin AND Supervisor; typed input remains possible.
+  if (el.dataset.preset) {
+    const value = String(el.value || '');
+    if (!value) return;
+    if (el.dataset.preset === 'project') {
+      state.projectText = value;
+      const input = document.getElementById('project-field');
+      if (input) input.value = value;
+      applySelectedProjectPreset();
+      const heightSelect = document.getElementById('height-preset-select');
+      if (heightSelect) heightSelect.value = String(state.height || '');
+      const strandSelect = document.getElementById('strand-preset-select');
+      if (strandSelect) strandSelect.value = String(state.strandPattern || '');
+    } else if (el.dataset.preset === 'height') {
+      state.height = value;
+      const input = document.getElementById('height-field');
+      if (input) input.value = value;
+    } else if (el.dataset.preset === 'strand') {
+      state.strandPattern = value;
+      const input = document.getElementById('strand-field');
+      if (input) input.value = value;
+    }
+    const preview = document.getElementById('material-preview');
+    if (preview) preview.innerHTML = materialsPreview();
+    return;
+  }
   if (!el.dataset.field) return;
   if (el.dataset.field === 'projectText') {
     state.projectText=el.value; applySelectedProjectPreset();
@@ -793,6 +861,22 @@ app.addEventListener('submit', async event => {
       state.modal=null; state.modalCycle=null; await refresh(); showToast('Summary record removed; audit retained');
     } catch(error) { showToast(error.message || 'Delete failed','error'); }
     finally { state.busy=false; render(); }
+    return;
+  }
+  if (form.id === 'project-title-edit-form') {
+    if (!state.admin) return showToast('Administrator permission required', 'error');
+    const project = state.projects.find(p => Number(p.id) === Number(form.dataset.projectId));
+    if (!project) return showToast('Project no longer exists. Refresh and retry.', 'error');
+    const newName = String(values.get('new_name') || '').trim();
+    if (newName.length < 2 || newName.length > 100) return showToast('Project Title must contain 2–100 characters.', 'error');
+    if (newName === project.name) return showToast('Project Title has not changed.', 'error');
+    try {
+      state.busy = true;
+      await state.repo.renameProject(project.id, newName);
+      state.modal = null; state.modalProjectId = null;
+      await refresh(); showToast(`Project ${project.code}: title corrected. Previous production records were preserved.`);
+    } catch(error) { showToast(error.message || 'Could not update Project Title.', 'error'); }
+    finally { state.busy = false; render(); }
     return;
   }
   if (form.id === 'default-project-form') return addDefaultProject(values.get('code'), values.get('name'), values.get('height_mm'), values.get('strand_pattern'));
