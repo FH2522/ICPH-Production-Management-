@@ -285,3 +285,131 @@
 .project-title-edit:hover{background:#dfecff}
 #title-project-code[readonly]{background:#f2f5fa;color:#526a86;cursor:not-allowed}
 @media(max-width:680px){.project-master-row{grid-template-columns:minmax(0,1fr) auto}.project-master-row>strong{grid-column:1;grid-row:1}.project-master-row>.project-master-tag{grid-column:2;grid-row:1}.project-master-row>.project-master-title{grid-column:1/-1;grid-row:2}.project-master-row>.project-title-edit{grid-column:1/-1;grid-row:3;justify-self:start}}
+
+
+/* v1.9.2: explicit saved dropdowns for BOTH Administrator and Supervisor. */
+.editor-fields .saved-preset-select {
+  display:block;
+  box-sizing:border-box;
+  width:100%;
+  min-width:0;
+  height:44px;
+  margin:6px 0 10px;
+  padding:0 30px 0 12px;
+  border:1px solid #b9cbe4;
+  border-radius:8px;
+  background-color:#f2f7ff;
+  color:#17385c;
+  font-size:12px;
+  font-weight:650;
+  cursor:pointer;
+}
+.editor-fields .saved-preset-select:focus {
+  outline:2px solid #78a8f3;
+  outline-offset:1px;
+}
+.editor-fields .preset-manual-label { margin-top:10px; }
+.editor-fields .two-fields .saved-preset-select { font-size:11px; padding-left:8px; }
+@media (max-width:500px) {
+  .editor-fields .two-fields { grid-template-columns:1fr; }
+  .editor-fields .saved-preset-select { min-height:46px; font-size:13px; }
+}
+
+
+/* ICPH HCS v1.9.3 - Freeze Production Archive header + first 3 columns.
+   Scope deliberately limited to archive: other tables are unchanged. */
+.archive-section .table-scroll {
+  --archive-date-width: 136px;
+  --archive-bed-width: 84px;
+  --archive-project-width: 205px;
+  max-height: min(66vh, 660px);
+  overflow-x: auto;
+  overflow-y: auto;
+  position: relative;
+  isolation: isolate;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+/* Sticky table cells render more reliably with separate borders. */
+.archive-section .archive-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: auto;
+}
+.archive-section .archive-table th,
+.archive-section .archive-table td {
+  box-sizing: border-box;
+  background-clip: padding-box;
+}
+
+/* Freeze the complete column-header row when scrolling down. */
+.archive-section .archive-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #f0f5fc;
+  box-shadow: 0 1px 0 #dce5f1;
+}
+
+/* Set deterministic widths to make left offsets line up exactly. */
+.archive-section .archive-table :is(th, td):nth-child(1) {
+  width: var(--archive-date-width);
+  min-width: var(--archive-date-width);
+  max-width: var(--archive-date-width);
+}
+.archive-section .archive-table :is(th, td):nth-child(2) {
+  width: var(--archive-bed-width);
+  min-width: var(--archive-bed-width);
+  max-width: var(--archive-bed-width);
+}
+.archive-section .archive-table :is(th, td):nth-child(3) {
+  width: var(--archive-project-width);
+  min-width: var(--archive-project-width);
+  max-width: var(--archive-project-width);
+}
+.archive-section .archive-table tbody td:nth-child(-n+3) {
+  position: sticky;
+  z-index: 3;
+  background: #fff;
+}
+.archive-section .archive-table :is(th, td):nth-child(1) { left: 0; }
+.archive-section .archive-table :is(th, td):nth-child(2) { left: var(--archive-date-width); }
+.archive-section .archive-table :is(th, td):nth-child(3) { left: calc(var(--archive-date-width) + var(--archive-bed-width)); }
+
+/* Top-left 3 intersection cells must stay above both the header and body. */
+.archive-section .archive-table thead th:nth-child(-n+3) {
+  z-index: 9;
+  background: #eaf2fc;
+}
+
+/* Visual boundary to show where the frozen columns end. */
+.archive-section .archive-table :is(th,td):nth-child(3) {
+  border-right: 1px solid #dbe5f1;
+  box-shadow: 5px 0 8px -7px rgba(30, 53, 91, .36);
+}
+.archive-section .archive-table tbody tr:hover td:nth-child(-n+3) {
+  background: #fafcff;
+}
+.archive-section .archive-table tbody td:nth-child(3) .muted-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Smaller screens still get the same frozen columns with narrower widths. */
+@media (max-width: 740px) {
+  .archive-section .table-scroll {
+    --archive-date-width: 102px;
+    --archive-bed-width: 63px;
+    --archive-project-width: 130px;
+    max-height: min(66vh, 560px);
+  }
+  .archive-section .archive-table :is(th,td) {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+}
